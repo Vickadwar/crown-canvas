@@ -1,0 +1,1 @@
+ALTER TYPE "public"."quick_post_template" ADD VALUE 'hr_spotlight' BEFORE 'general_announcement';
