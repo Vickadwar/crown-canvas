@@ -55,7 +55,7 @@ export async function POST(request: Request) {
       return Response.json(
         {
           error:
-            "File exceeds the 48 MB single-file upload limit on Supabase Free Tier. Compress video to 1080p H.264 MP4 (2.5-3.5 Mbps) or link via YouTube/Web URL (0 MB storage).",
+            "File exceeds the 48 MB upload limit. Enable Auto-Compress (Balanced 720p for longer videos) or link via YouTube/Web URL (0 MB storage).",
         },
         { status: 413 }
       );

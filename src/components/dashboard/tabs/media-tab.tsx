@@ -7,9 +7,10 @@
  * assignment so any single video or image can be reused across multiple playlists.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Check,
+  Cpu,
   Film,
   Globe,
   HardDrive,
@@ -38,6 +39,12 @@ import {
   normalizeExternalMediaUrl,
   optimizeImageForSignage,
 } from "@/lib/media-optimizer";
+import {
+  compressVideoInBrowser,
+  isWebCodecsSupported,
+  type VideoCompressionPreset,
+  type VideoCompressionProgress,
+} from "@/lib/video-compressor";
 import type { MediaAssetItem, OverviewPayload, PlaylistRecord } from "../cms-types";
 
 interface MediaTabProps {
@@ -78,10 +85,18 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [addMode, setAddMode] = useState<"upload" | "url">("upload");
 
-  // Upload state
+  // Upload & GPU Video Compression state
   const [title, setTitle] = useState("");
   const [deptId, setDeptId] = useState(data.departments[0]?.id ?? "");
   const [file, setFile] = useState<File | null>(null);
+  const [compressionPreset, setCompressionPreset] =
+    useState<VideoCompressionPreset>("auto_fit");
+  const [compressionProgress, setCompressionProgress] =
+    useState<VideoCompressionProgress | null>(null);
+  const [uploadPhase, setUploadPhase] = useState<
+    "idle" | "compressing" | "uploading" | "saving"
+  >("idle");
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [targetPlaylistIds, setTargetPlaylistIds] = useState<string[]>(
     data.playlists[0]?.id ? [data.playlists[0].id] : []
   );
@@ -187,6 +202,15 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
     }
   }
 
+  function handleCancelUpload() {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setUploading(false);
+    setUploadPhase("idle");
+    setCompressionProgress(null);
+    toast.info("Video compression cancelled");
+  }
+
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
     if (!file || !title.trim() || !deptId) {
@@ -194,17 +218,63 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
       return;
     }
     const dept = deptById.get(deptId);
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setUploading(true);
+    setCompressionProgress(null);
+
     try {
       let uploadFile = file;
+      let compressionSummary: string | null = null;
+      let knownDurationSeconds: number | null = null;
+
       if (file.type.startsWith("image/")) {
+        setUploadPhase("compressing");
         const optimized = await optimizeImageForSignage(file);
         uploadFile = optimized.file;
+      } else if (
+        file.type.startsWith("video/") ||
+        /\.(mp4|mov|webm|mkv|m4v)$/i.test(file.name)
+      ) {
+        const needsCompression =
+          file.size > 32 * 1024 * 1024 ||
+          compressionPreset !== "auto_fit" ||
+          !(file.type === "video/mp4" || file.name.toLowerCase().endsWith(".mp4"));
+
+        if (needsCompression) {
+          if (!isWebCodecsSupported()) {
+            toast.error(
+              "Automatic GPU video compression requires desktop Chrome or Edge. Please switch browsers or link via External URL."
+            );
+            return;
+          }
+          setUploadPhase("compressing");
+          const result = await compressVideoInBrowser(file, {
+            preset: compressionPreset,
+            onProgress: (p) => setCompressionProgress(p),
+            signal: controller.signal,
+          });
+          if (controller.signal.aborted) return;
+
+          uploadFile = result.file;
+          knownDurationSeconds = result.durationSeconds;
+
+          if (result.compressed) {
+            const beforeMb = (result.originalBytes / (1024 * 1024)).toFixed(1);
+            const afterMb = (result.outputBytes / (1024 * 1024)).toFixed(1);
+            compressionSummary = `${beforeMb} MB → ${afterMb} MB (-${result.savingsPercent}%)`;
+          }
+        }
       }
+
+      if (controller.signal.aborted) return;
+      setUploadPhase("uploading");
 
       const [sha256Checksum, durationSeconds] = await Promise.all([
         computeFileSha256(uploadFile),
-        readMediaDuration(uploadFile),
+        knownDurationSeconds
+          ? Promise.resolve(knownDurationSeconds)
+          : readMediaDuration(uploadFile),
       ]);
 
       const urlRes = await fetch("/api/media/upload-url", {
@@ -217,6 +287,7 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
           sha256Checksum,
           fileSizeBytes: uploadFile.size,
         }),
+        signal: controller.signal,
       });
       const urlJson = await urlRes.json();
       if (!urlRes.ok) {
@@ -227,7 +298,9 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
       let assetId: string | undefined;
       if (urlJson.deduplicated && urlJson.existingAsset?.id) {
         assetId = urlJson.existingAsset.id;
-        toast.info(`Reused existing identical file "${urlJson.existingAsset.title}" (0 extra bytes)`);
+        toast.info(
+          `Reused existing identical file "${urlJson.existingAsset.title}" (0 extra bytes)`
+        );
       } else {
         const putRes = await fetch(urlJson.signedUrl, {
           method: "PUT",
@@ -235,11 +308,13 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
             "Content-Type": uploadFile.type || "application/octet-stream",
           },
           body: uploadFile,
+          signal: controller.signal,
         });
         if (!putRes.ok) {
           toast.error("Cloud upload failed");
           return;
         }
+        setUploadPhase("saving");
         const saveRes = await fetch("/api/media", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -254,6 +329,7 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
             durationSeconds,
             departmentId: deptId,
           }),
+          signal: controller.signal,
         });
         const saveJson = await saveRes.json();
         if (!saveRes.ok) {
@@ -272,18 +348,27 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
         );
       }
 
+      const prefix = compressionSummary ? `Compressed ${compressionSummary} & uploaded` : "Uploaded";
       toast.success(
         targetPlaylistIds.length > 0
-          ? `Uploaded "${title.trim()}" & added to ${targetPlaylistIds.length} playlist(s)`
-          : `Uploaded "${title.trim()}" to library`
+          ? `${prefix} "${title.trim()}" to ${targetPlaylistIds.length} playlist(s)`
+          : `${prefix} "${title.trim()}" to library`
       );
       setTitle("");
       setFile(null);
       setRunningTagline("");
       setShowAddPanel(false);
       await onRefresh();
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      const msg =
+        err instanceof Error ? err.message : "Failed to optimize or upload video";
+      toast.error(msg);
     } finally {
+      abortControllerRef.current = null;
       setUploading(false);
+      setUploadPhase("idle");
+      setCompressionProgress(null);
     }
   }
 
@@ -548,32 +633,124 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label className="text-xs">MP4 Video or PNG/JPG Image</Label>
+                    <Label className="text-xs">Video (MP4/MOV/WebM/MKV) or Image</Label>
                     <Input
                       type="file"
-                      accept="video/mp4,video/webm,image/*"
+                      accept="video/*,image/*"
                       className="h-8 text-xs"
-                      onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                      disabled={uploading}
+                      onChange={(e) => {
+                        const picked = e.target.files?.[0] ?? null;
+                        setFile(picked);
+                        if (picked && !title.trim()) {
+                          setTitle(
+                            picked.name
+                              .replace(/\.[^.]+$/, "")
+                              .replace(/[-_]+/g, " ")
+                              .trim()
+                          );
+                        }
+                      }}
                       required
                     />
                   </div>
                 </div>
 
-                {file && file.type.startsWith("video/") && (() => {
-                  const compat = inspectVideoForAndroidTv(file);
-                  return (
-                    <p
-                      className={`rounded-lg px-3 py-1.5 text-xs ${
-                        compat.level === "optimal"
-                          ? "bg-emerald-50 text-emerald-700"
-                          : "bg-amber-50 text-amber-800"
-                      }`}
-                    >
-                      {compat.tvReady ? "✓ " : "⚠ "}
-                      {compat.summary}
-                    </p>
-                  );
-                })()}
+                {file &&
+                  (file.type.startsWith("video/") ||
+                    /\.(mp4|mov|webm|mkv|m4v)$/i.test(file.name)) &&
+                  (() => {
+                    const compat = inspectVideoForAndroidTv(file);
+                    const fileMb = (file.size / (1024 * 1024)).toFixed(1);
+                    return (
+                      <div className="space-y-2.5 rounded-xl border border-blue-200/80 bg-blue-50/50 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 text-xs font-medium text-blue-950">
+                            <Cpu className="size-4 text-blue-600" />
+                            <span>
+                              Built-In GPU Video Compressor{" "}
+                              <span className="font-normal text-blue-700">
+                                ({fileMb} MB selected)
+                              </span>
+                            </span>
+                          </div>
+                          <div className="w-56">
+                            <ModernSelect
+                              size="sm"
+                              value={compressionPreset}
+                              onValueChange={(v) =>
+                                setCompressionPreset(v as VideoCompressionPreset)
+                              }
+                              options={[
+                                {
+                                  value: "auto_fit",
+                                  label: "Auto Fit < 45 MB (Recommended)",
+                                },
+                                {
+                                  value: "high_1080p",
+                                  label: "High Quality 1080p H.264",
+                                },
+                                {
+                                  value: "balanced_720p",
+                                  label: "Compact 720p (Longer Videos)",
+                                },
+                              ]}
+                            />
+                          </div>
+                        </div>
+
+                        <p
+                          className={`rounded-lg px-2.5 py-1.5 text-xs ${
+                            compat.level === "optimal"
+                              ? "bg-emerald-50 text-emerald-700"
+                              : "bg-white/80 text-blue-900"
+                          }`}
+                        >
+                          {compat.tvReady ? "✓ " : "⚡ "}
+                          {compat.summary}
+                        </p>
+
+                        {uploading && (
+                          <div className="space-y-1.5 rounded-lg border border-blue-200 bg-white p-2.5">
+                            <div className="flex items-center justify-between text-xs font-medium text-zinc-900">
+                              <span>
+                                {uploadPhase === "compressing"
+                                  ? compressionProgress?.stage === "retrying"
+                                    ? `Fine-tuning size under 45 MB (${compressionProgress.percent}%)`
+                                    : compressionProgress?.stage === "analyzing"
+                                      ? "Analyzing video tracks..."
+                                      : `Compressing on GPU (${compressionProgress?.percent ?? 0}%)${
+                                          compressionProgress?.totalSeconds
+                                            ? ` · ${compressionProgress.processedSeconds ?? 0}s / ${compressionProgress.totalSeconds}s`
+                                            : ""
+                                        }`
+                                  : uploadPhase === "uploading"
+                                    ? "Uploading optimized MP4 to cloud..."
+                                    : "Saving to Media Library & Playlists..."}
+                              </span>
+                              <span className="font-mono text-[11px] text-blue-700">
+                                {uploadPhase === "compressing"
+                                  ? `${compressionProgress?.percent ?? 0}%`
+                                  : "100%"}
+                              </span>
+                            </div>
+                            <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-100">
+                              <div
+                                className="h-full rounded-full bg-blue-600 transition-all duration-200"
+                                style={{
+                                  width: `${
+                                    uploadPhase === "compressing"
+                                      ? Math.max(4, compressionProgress?.percent ?? 4)
+                                      : 100
+                                  }%`,
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                 {/* Multi-Playlist Assignment right during upload */}
                 {data.playlists.length > 0 && (
@@ -629,13 +806,25 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={() => setShowAddPanel(false)}
+                    onClick={() => {
+                      if (uploading) {
+                        handleCancelUpload();
+                      } else {
+                        setShowAddPanel(false);
+                      }
+                    }}
                   >
-                    Cancel
+                    {uploading ? "Cancel Compression" : "Cancel"}
                   </Button>
                   <Button type="submit" size="sm" disabled={uploading}>
                     <Upload className="size-3.5" />
-                    {uploading ? "Optimizing & Uploading..." : "Upload Asset"}
+                    {uploadPhase === "compressing"
+                      ? `Compressing (${compressionProgress?.percent ?? 0}%)...`
+                      : uploadPhase === "uploading"
+                        ? "Uploading to Cloud..."
+                        : uploadPhase === "saving"
+                          ? "Finalizing..."
+                          : "Compress & Upload"}
                   </Button>
                 </div>
               </form>

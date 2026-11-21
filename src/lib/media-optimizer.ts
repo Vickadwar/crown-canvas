@@ -153,7 +153,7 @@ export function inspectVideoForAndroidTv(
     return {
       tvReady: false,
       level: "warning",
-      summary: `${sizeMb.toFixed(1)} MB exceeds Supabase Free Tier 50 MB cap. Compress to 1080p H.264 MP4 (2.5-3.5 Mbps).`,
+      summary: `${sizeMb.toFixed(1)} MB — will be automatically GPU-compressed to crisp 1080p/720p H.264 MP4 (< 45 MB) with stereo audio on upload.`,
     };
   }
 
@@ -162,7 +162,7 @@ export function inspectVideoForAndroidTv(
       tvReady: false,
       level: "warning",
       summary:
-        "WebM/VP9 works on Mini PCs & newer TVs, but H.264 MP4 is recommended for hardware decoding on older Android TVs.",
+        "Non-MP4 format detected — will be automatically transcoded to hardware-ready H.264 MP4 on upload.",
     };
   }
 
@@ -170,7 +170,7 @@ export function inspectVideoForAndroidTv(
     return {
       tvReady: true,
       level: "warning",
-      summary: `H.264 MP4 (${sizeMb.toFixed(1)} MB) — TV Ready, though compressing to <= 20 MB saves Supabase egress.`,
+      summary: `H.264 MP4 (${sizeMb.toFixed(1)} MB) — TV Ready (Auto-Compress will shrink it further to save bandwidth & TV cache).`,
     };
   }
 
