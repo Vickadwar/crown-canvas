@@ -7,9 +7,12 @@ import { recordAuditLog } from "@/lib/audit";
 
 const patchScreenSchema = z.object({
   activePlaylistId: z.string().uuid().nullable().optional(),
+  branchId: z.string().uuid().optional(),
+  departmentId: z.string().uuid().nullable().optional(),
   groupId: z.string().uuid().nullable().optional(),
   orientation: z.enum(["landscape", "portrait"]).optional(),
   name: z.string().min(2).max(150).optional(),
+  isActive: z.boolean().optional(),
   screenRole: z
     .enum(["showroom_customer", "back_office", "factory_floor", "reception"])
     .optional(),

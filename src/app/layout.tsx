@@ -98,9 +98,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Crown Canvas — Crown Paints Digital Signage",
+  title: "Crown Canvas — Enterprise Digital Signage",
   description:
-    "Enterprise digital signage CMS & offline-first showroom player for Kenya, Tanzania, and Uganda.",
+    "Enterprise digital signage CMS & offline-first showroom player for multi-location networks.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

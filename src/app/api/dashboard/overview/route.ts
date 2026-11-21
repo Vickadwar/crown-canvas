@@ -112,13 +112,13 @@ export async function GET() {
       dataFeeds: [
         {
           id: "feed-demo-sales",
-          key: "east-africa-sales-q4",
-          name: "East Africa Showroom Sales Feed",
+          key: "showroom-sales-q4",
+          name: "Showroom Sales Performance Feed",
           departmentId: "dept-sales",
           sourceType: "push_webhook",
           payload: {
             kpis: [
-              { label: "East Africa YTD", value: "KES 54.6M", delta: "+18.4% YoY" },
+              { label: "Network YTD", value: "$1.42M", delta: "+18.4% YoY" },
               { label: "Quota Attainment", value: "105.8%", delta: "Above Plan" },
             ],
           },
@@ -136,7 +136,7 @@ export async function GET() {
       playlists: [
         {
           id: "pl-demo-1",
-          name: "East Africa Showroom Default Loop",
+          name: "Showroom Default Loop",
           description: "Starter customer service & brand loop (preview mode).",
           departmentId: "dept-cs",
           layoutId: "lay-split",

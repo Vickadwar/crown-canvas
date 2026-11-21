@@ -1,23 +1,26 @@
 /**
  * @file src/app/api/reports/executive/route.ts
- * @description Executive Proof-of-Play SLA, QR Attribution & TCO Cost-Savings Report API
- * plus 90-day Proof-of-Play retention pruning to keep Postgres comfortably inside Free/Pro limits.
+ * @description White-label Executive Proof-of-Play SLA, Fleet Health, QR Attribution
+ * & Storage Report API plus 90-day Proof-of-Play retention pruning.
  */
 
-import { lt, sql } from "drizzle-orm";
+import { eq, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   db,
   isDatabaseConfigured,
+  withDbRetry,
   branches,
   departments,
   screens,
+  mediaAssets,
   proofOfPlayLogs,
   qrScanEvents,
 } from "@/db";
 import { requireAdminAccess } from "@/lib/auth-guard";
 import { computeScreenHealth } from "@/lib/screen-health";
 import { recordAuditLog } from "@/lib/audit";
+import { getActiveStorageProvider } from "@/lib/storage-provider";
 
 const pruneSchema = z.object({
   action: z.literal("prune_telemetry"),
@@ -33,35 +36,48 @@ export async function GET() {
   }
 
   try {
-    const [allBranches, allDepts, allScreens, popByDept, popByBranch, qrTotals] =
-      await Promise.all([
-        db.select().from(branches),
-        db.select().from(departments),
-        db.select().from(screens),
-        db
+    const [allBranches, allDepts, allScreens, popByDept, popByBranch, qrTotals, assetRows] =
+      await withDbRetry(async () => {
+        const b1 = await Promise.all([
+          db.select().from(branches),
+          db.select().from(departments),
+          db.select().from(screens),
+        ]);
+        const b2 = await Promise.all([
+          db
+            .select({
+              departmentId: proofOfPlayLogs.departmentId,
+              plays: sql<number>`count(*)::int`,
+              totalSeconds: sql<number>`coalesce(sum(${proofOfPlayLogs.durationPlayedSeconds}), 0)::int`,
+            })
+            .from(proofOfPlayLogs)
+            .groupBy(proofOfPlayLogs.departmentId),
+          db
+            .select({
+              branchId: proofOfPlayLogs.branchId,
+              plays: sql<number>`count(*)::int`,
+              totalSeconds: sql<number>`coalesce(sum(${proofOfPlayLogs.durationPlayedSeconds}), 0)::int`,
+            })
+            .from(proofOfPlayLogs)
+            .groupBy(proofOfPlayLogs.branchId),
+          db
+            .select({
+              branchId: qrScanEvents.branchId,
+              scans: sql<number>`count(*)::int`,
+            })
+            .from(qrScanEvents)
+            .groupBy(qrScanEvents.branchId),
+        ]);
+        const assets = await db
           .select({
-            departmentId: proofOfPlayLogs.departmentId,
-            plays: sql<number>`count(*)::int`,
-            totalSeconds: sql<number>`coalesce(sum(${proofOfPlayLogs.durationPlayedSeconds}), 0)::int`,
+            mediaType: mediaAssets.mediaType,
+            storagePath: mediaAssets.storagePath,
+            fileSizeBytes: mediaAssets.fileSizeBytes,
           })
-          .from(proofOfPlayLogs)
-          .groupBy(proofOfPlayLogs.departmentId),
-        db
-          .select({
-            branchId: proofOfPlayLogs.branchId,
-            plays: sql<number>`count(*)::int`,
-            totalSeconds: sql<number>`coalesce(sum(${proofOfPlayLogs.durationPlayedSeconds}), 0)::int`,
-          })
-          .from(proofOfPlayLogs)
-          .groupBy(proofOfPlayLogs.branchId),
-        db
-          .select({
-            branchId: qrScanEvents.branchId,
-            scans: sql<number>`count(*)::int`,
-          })
-          .from(qrScanEvents)
-          .groupBy(qrScanEvents.branchId),
-      ]);
+          .from(mediaAssets)
+          .where(eq(mediaAssets.isArchived, false));
+        return [...b1, ...b2, assets] as const;
+      });
 
     const branchById = new Map(allBranches.map((b) => [b.id, b]));
     const deptById = new Map(allDepts.map((d) => [d.id, d]));
@@ -82,13 +98,21 @@ export async function GET() {
         ? Math.round((healthBreakdown.online / totalScreens) * 1000) / 10
         : 100;
 
-    // Commercial TCO ROI Calculator (compare against ScreenCloud Core $20/mo & Pro $30/mo per screen)
-    const modeledScreenCount = Math.max(totalScreens, 15);
-    const screenCloudCoreAnnualUsd = modeledScreenCount * 20 * 12;
-    const screenCloudProAnnualUsd = modeledScreenCount * 30 * 12;
-    const yodeckEnterpriseAnnualUsd = modeledScreenCount * 16 * 12;
-    const crownCanvasOneOffUsd = 3000;
-    const crownCanvasAnnualInfraUsd = 300; // $25/mo Supabase Pro at scale
+    const qrScansTotal = qrTotals.reduce((acc, q) => acc + q.scans, 0);
+
+    const uniqueBytes = new Map<string, number>();
+    let zeroDiskCount = 0;
+    for (const a of assetRows) {
+      if (a.mediaType === "web_url" || a.mediaType === "pdf" || a.fileSizeBytes === 0) {
+        zeroDiskCount += 1;
+      } else if (!uniqueBytes.has(a.storagePath)) {
+        uniqueBytes.set(a.storagePath, a.fileSizeBytes);
+      }
+    }
+    const totalBytesUsed = Array.from(uniqueBytes.values()).reduce(
+      (sum, bytes) => sum + bytes,
+      0
+    );
 
     return Response.json({
       generatedAt: new Date().toISOString(),
@@ -101,28 +125,25 @@ export async function GET() {
         departmentId: row.departmentId,
         departmentName:
           (row.departmentId && deptById.get(row.departmentId)?.name) ||
-          "Showroom Shared",
+          "Shared Signage",
         plays: row.plays,
         totalMinutes: Math.round((row.totalSeconds / 60) * 10) / 10,
       })),
       impressionsByBranch: popByBranch.map((row) => ({
         branchId: row.branchId,
-        branchName: branchById.get(row.branchId)?.name ?? "Showroom",
+        branchName: branchById.get(row.branchId)?.name ?? "Location",
         plays: row.plays,
         totalMinutes: Math.round((row.totalSeconds / 60) * 10) / 10,
         qrScans:
           qrTotals.find((q) => q.branchId === row.branchId)?.scans ?? 0,
       })),
-      roiComparison: {
-        modeledScreenCount,
-        screenCloudCoreAnnualUsd,
-        screenCloudProAnnualUsd,
-        yodeckEnterpriseAnnualUsd,
-        crownCanvasOneOffUsd,
-        crownCanvasAnnualInfraUsd,
-        threeYearSavingsVsScreenCloudProUsd:
-          screenCloudProAnnualUsd * 3 -
-          (crownCanvasOneOffUsd + crownCanvasAnnualInfraUsd * 3),
+      qrScansTotal,
+      storageStats: {
+        totalBytesUsed,
+        quotaBytes: 1024 * 1024 * 1024,
+        uploadedCount: uniqueBytes.size,
+        zeroDiskCount,
+        provider: getActiveStorageProvider(),
       },
     });
   } catch (err) {
@@ -162,10 +183,12 @@ export async function POST(request: Request) {
       Date.now() - parsed.data.retentionDays * 24 * 60 * 60 * 1000
     );
 
-    const deleted = await db
-      .delete(proofOfPlayLogs)
-      .where(lt(proofOfPlayLogs.createdAt, cutoff))
-      .returning({ id: proofOfPlayLogs.id });
+    const deleted = await withDbRetry(() =>
+      db
+        .delete(proofOfPlayLogs)
+        .where(lt(proofOfPlayLogs.createdAt, cutoff))
+        .returning({ id: proofOfPlayLogs.id })
+    );
 
     await recordAuditLog({
       action: "telemetry.pruned",

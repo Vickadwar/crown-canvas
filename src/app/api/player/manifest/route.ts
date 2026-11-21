@@ -116,8 +116,25 @@ export async function GET(request: Request) {
       now
     );
 
+    const emergencyPlaylistId =
+      matchingOverride?.overrideKind === "playlist" &&
+      matchingOverride.playlistId
+        ? matchingOverride.playlistId
+        : null;
+
     const targetPlaylistId =
-      matchedSchedule?.playlistId ?? screen.activePlaylistId;
+      emergencyPlaylistId ??
+      matchedSchedule?.playlistId ??
+      screen.activePlaylistId;
+
+    const [overrideMediaAsset] =
+      matchingOverride?.overrideKind === "media_asset" &&
+      matchingOverride.mediaAssetId
+        ? await db
+            .select()
+            .from(mediaAssets)
+            .where(eq(mediaAssets.id, matchingOverride.mediaAssetId))
+        : [];
 
     let targetPlaylist = targetPlaylistId
       ? (
@@ -266,17 +283,19 @@ export async function GET(request: Request) {
           ? autoTicker
           : [
               `Welcome to ${branch?.name ?? "Crown Paints"}`,
-              "Precision Tinting • 1,000+ Designer Shades",
-              "Zero Harm Starts With You • Crown Paints East Africa",
+              "Precision Tinting • 1,800+ Designer Shades",
+              "If you like it... Crown it!",
             ];
 
     const stablePayload = {
+      screenPaused: screen.isActive === false,
       screen: {
         id: screen.id,
         name: screen.name,
         orientation: screen.orientation,
         screenRole: screen.screenRole,
         hardwareType: screen.hardwareType,
+        isActive: screen.isActive,
       },
       branch: branch
         ? {
@@ -323,7 +342,25 @@ export async function GET(request: Request) {
           }
         : null,
       tickerMessages,
-      emergencyOverride: matchingOverride ?? null,
+      emergencyOverride: matchingOverride
+        ? {
+            id: matchingOverride.id,
+            title: matchingOverride.title,
+            message: matchingOverride.message,
+            overrideKind: matchingOverride.overrideKind ?? "alert",
+            severity: matchingOverride.severity,
+            playlistId: matchingOverride.playlistId ?? null,
+            mediaAsset: overrideMediaAsset
+              ? {
+                  id: overrideMediaAsset.id,
+                  title: overrideMediaAsset.title,
+                  mediaType: overrideMediaAsset.mediaType,
+                  publicUrl: overrideMediaAsset.publicUrl,
+                  mimeType: overrideMediaAsset.mimeType,
+                }
+              : null,
+          }
+        : null,
       items: resolvedItems,
     };
 

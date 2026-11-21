@@ -100,7 +100,7 @@ export function MultiZoneFrame({
       : [
           "If you like it... Crown it!",
           "Ask our Colour Specialists for precision tinting in 1,800+ shades",
-          `Crown Paints East Africa • Local Showroom Pricing in ${currencyCode}`,
+          `Crown Paints • Local Showroom Pricing in ${currencyCode}`,
         ];
 
   const qrDestination =

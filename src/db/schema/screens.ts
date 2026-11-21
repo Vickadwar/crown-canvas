@@ -93,6 +93,7 @@ export const screens = pgTable("screens", {
   resolution: varchar("resolution", { length: 32 }).default("1920x1080"),
   deviceTokenHash: varchar("device_token_hash", { length: 128 }).unique(),
   isPaired: boolean("is_paired").default(false).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
   isOnline: boolean("is_online").default(false).notNull(),
   lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
   appVersion: varchar("app_version", { length: 32 }),

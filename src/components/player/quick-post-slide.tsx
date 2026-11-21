@@ -420,7 +420,7 @@ export function QuickPostSlide({
                     compact ? "text-[10px]" : "text-sm"
                   }`}
                 >
-                  One Crown East Africa
+                  One Crown Network
                 </p>
               </div>
             )}

@@ -17,6 +17,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { departments } from "./departments";
 import { users } from "./auth";
+import { mediaAssets } from "./assets";
 import { playlists } from "./studio";
 import { screenRoleEnum } from "./screens";
 
@@ -33,6 +34,12 @@ export const overrideSeverityEnum = pgEnum("override_severity", [
   "info",
   "warning",
   "critical",
+]);
+
+export const overrideKindEnum = pgEnum("override_kind", [
+  "alert",
+  "media_asset",
+  "playlist",
 ]);
 
 export const schedules = pgTable("schedules", {
@@ -61,7 +68,14 @@ export const schedules = pgTable("schedules", {
 export const emergencyOverrides = pgTable("emergency_overrides", {
   id: uuid("id").defaultRandom().primaryKey(),
   title: varchar("title", { length: 180 }).notNull(),
-  message: text("message").notNull(),
+  message: text("message").default("").notNull(),
+  overrideKind: overrideKindEnum("override_kind").default("alert").notNull(),
+  mediaAssetId: uuid("media_asset_id").references(() => mediaAssets.id, {
+    onDelete: "set null",
+  }),
+  playlistId: uuid("playlist_id").references(() => playlists.id, {
+    onDelete: "set null",
+  }),
   severity: overrideSeverityEnum("severity").default("warning").notNull(),
   departmentId: uuid("department_id").references(() => departments.id, {
     onDelete: "set null",

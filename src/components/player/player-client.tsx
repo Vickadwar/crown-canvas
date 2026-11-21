@@ -109,12 +109,22 @@ interface PlayerManifest {
     name: string;
     zonesConfig: LayoutZone[];
   } | null;
+  screenPaused?: boolean;
   tickerMessages?: string[];
   emergencyOverride: {
     id: string;
     title: string;
     message: string;
+    overrideKind?: "alert" | "media_asset" | "playlist";
     severity: "info" | "warning" | "critical";
+    playlistId?: string | null;
+    mediaAsset?: {
+      id: string;
+      title: string;
+      mediaType: "video" | "image" | "web_url" | "pdf";
+      publicUrl: string;
+      mimeType: string;
+    } | null;
   } | null;
   items: PlayerItem[];
   generatedAt: string;
@@ -811,12 +821,12 @@ export function PlayerClient() {
   const currentPlaybackUrl =
     currentItem?.kind === "media_asset"
       ? (currentMediaKey ? slotUrls[currentMediaKey] : undefined) ||
-        currentItem.publicUrl
+      currentItem.publicUrl
       : null;
   const nextPlaybackUrl =
     nextItem?.kind === "media_asset"
       ? (nextMediaKey ? slotUrls[nextMediaKey] : undefined) ||
-        nextItem.publicUrl
+      nextItem.publicUrl
       : null;
 
   // Revoke any remaining blob: URLs on unmount
@@ -1192,7 +1202,7 @@ export function PlayerClient() {
           {!pairingConfigured && (
             <p className="mx-auto mt-6 max-w-md rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 text-xs text-zinc-600">
               Backend database credentials are not configured yet. Add your
-              Supabase environment variables to activate screen pairing.
+              cloud environment variables to activate screen pairing.
             </p>
           )}
 
@@ -1217,12 +1227,88 @@ export function PlayerClient() {
     );
   }
 
-  // Emergency Override Screen
-  if (manifest?.emergencyOverride) {
+  // Admin-Paused / Deactivated Screen Standby (retains pairing token; resumes within 2s on reactivate)
+  if (!demoMode && manifest?.screenPaused) {
+    return (
+      <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#09090b] p-12 text-center text-zinc-400 select-none">
+        <div className="mb-6 rounded-2xl bg-white px-5 py-2.5 shadow-lg">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={CROWN_OFFICIAL_LOGO_URL}
+            alt="Crown Paints"
+            className="h-10 w-auto object-contain"
+          />
+        </div>
+        <p className="font-mono text-6xl font-black tracking-tight text-zinc-200">
+          {clockText}
+        </p>
+        <p className="mt-4 text-base font-semibold text-zinc-300">
+          {manifest.screen.name} — Display Paused
+        </p>
+        <p className="mt-1 text-xs text-zinc-500">
+          Re-activate this screen in Fleet &amp; Pairing to resume playback immediately.
+        </p>
+      </div>
+    );
+  }
+
+  // Emergency Override Screen (Supports 3 Modes: Custom Alert, Media Clip Takeover, or Playlist Takeover)
+  if (
+    manifest?.emergencyOverride &&
+    manifest.emergencyOverride.overrideKind !== "playlist"
+  ) {
     const ov = manifest.emergencyOverride;
+    const badgeColor =
+      ov.severity === "critical"
+        ? "bg-rose-600 text-white"
+        : ov.severity === "warning"
+          ? "bg-amber-500 text-zinc-950"
+          : "bg-blue-600 text-white";
+
+    if (ov.overrideKind === "media_asset" && ov.mediaAsset) {
+      return (
+        <div
+          ref={playerContainerRef}
+          className="relative h-screen w-screen overflow-hidden bg-black text-white select-none"
+        >
+          <div className="absolute left-5 top-5 z-30 flex items-center gap-2 rounded-full bg-black/75 px-3.5 py-1.5 backdrop-blur-md">
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${badgeColor}`}>
+              LIVE BROADCAST
+            </span>
+            <span className="text-xs font-semibold text-white">{ov.title}</span>
+          </div>
+          {ov.mediaAsset.mediaType === "video" ? (
+            <video
+              src={ov.mediaAsset.publicUrl}
+              className="h-full w-full bg-black object-contain"
+              autoPlay
+              loop
+              muted={isMuted}
+              playsInline
+            />
+          ) : ov.mediaAsset.mediaType === "web_url" ||
+            ov.mediaAsset.mediaType === "pdf" ? (
+            <iframe
+              src={ov.mediaAsset.publicUrl}
+              title={ov.title}
+              className="h-full w-full border-0 bg-white"
+              allow="autoplay; fullscreen"
+            />
+          ) : (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={ov.mediaAsset.publicUrl}
+              alt={ov.title}
+              className="h-full w-full bg-black object-contain"
+            />
+          )}
+        </div>
+      );
+    }
+
     const bg =
       ov.severity === "critical"
-        ? "bg-red-950 text-red-50"
+        ? "bg-rose-950 text-rose-50"
         : ov.severity === "warning"
           ? "bg-amber-950 text-amber-50"
           : "bg-blue-950 text-blue-50";
@@ -1230,13 +1316,15 @@ export function PlayerClient() {
       <div
         className={`flex h-screen w-screen flex-col items-center justify-center p-16 text-center ${bg}`}
       >
-        <span className="mb-4 rounded-full border border-white/25 bg-white/10 px-4 py-1 text-sm font-bold uppercase tracking-widest">
-          HEAD OFFICE BROADCAST • {ov.severity}
+        <span className={`mb-5 rounded-full px-4 py-1 text-xs font-bold uppercase tracking-widest ${badgeColor}`}>
+          EMERGENCY BROADCAST • {ov.severity}
         </span>
         <h1 className="max-w-4xl text-5xl font-black tracking-tight md:text-7xl">
           {ov.title}
         </h1>
-        <p className="mt-6 max-w-3xl text-2xl opacity-90">{ov.message}</p>
+        {ov.message && (
+          <p className="mt-6 max-w-3xl text-2xl opacity-90">{ov.message}</p>
+        )}
       </div>
     );
   }
@@ -1424,12 +1512,12 @@ export function PlayerClient() {
       {/* Hover-Only Broadcast Telemetry & Controls (invisible until hovering the bottom-right corner) */}
       <div
         className={`group/hud pointer-events-auto absolute right-0 z-30 flex items-end justify-end p-4 ${hasMultiZoneLayout ||
-            Boolean(
-              manifest?.playlist?.tickerText &&
-              manifest.playlist.tickerText.trim().length > 0
-            )
-            ? "bottom-16"
-            : "bottom-0"
+          Boolean(
+            manifest?.playlist?.tickerText &&
+            manifest.playlist.tickerText.trim().length > 0
+          )
+          ? "bottom-16"
+          : "bottom-0"
           }`}
       >
         <div className="pointer-events-none flex translate-y-1 items-center gap-2 rounded-full border border-white/15 bg-black/80 px-3.5 py-1.5 text-[11px] font-medium text-white/95 opacity-0 shadow-2xl backdrop-blur-md transition-all duration-200 group-hover/hud:pointer-events-auto group-hover/hud:translate-y-0 group-hover/hud:opacity-100 focus-within:pointer-events-auto focus-within:translate-y-0 focus-within:opacity-100">

@@ -39,7 +39,7 @@ const DEFAULT_CHART_DATA = [
 ];
 
 const DEFAULT_KPIS = [
-  { label: "East Africa Sales", value: "KES 54.6M", delta: "+18.4% YoY" },
+  { label: "Network Sales", value: "54.6M", delta: "+18.4% YoY" },
   { label: "Target Attainment", value: "105.8%", delta: "Above Plan" },
   { label: "Top Showroom", value: "Westlands", delta: "112% Quota" },
   { label: "Top Finish", value: "Weatherguard", delta: "38% Volume" },
@@ -386,7 +386,7 @@ export function SalesAnalyticsSlide({
       >
         <span className="flex items-center gap-1.5">
           <Sparkles className={`size-3 ${isLight ? "text-amber-600" : "text-amber-400"}`} />
-          {branchName || "Crown Paints East Africa Commercial Network"}
+          {branchName || "Crown Paints Commercial Network"}
         </span>
         <span>{departmentName || "Sales & Showrooms"}</span>
       </div>
