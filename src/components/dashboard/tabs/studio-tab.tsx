@@ -319,6 +319,8 @@ export function StudioTab({
               publicUrl: a.publicUrl,
             }))}
           customTemplates={data.customTemplates ?? []}
+          customBackgrounds={data.studioBackgrounds ?? []}
+          onRefreshBackgrounds={onRefresh}
           isEditingExisting={Boolean(editingQuickPostId)}
           savingSlide={savingStudio}
           onSaveSlide={onSaveCanvasSlide}

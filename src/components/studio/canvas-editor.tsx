@@ -49,8 +49,10 @@ import {
   Tv,
   Type,
   Undo2,
+  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
+import { optimizeImageForSignage } from "@/lib/media-optimizer";
 import type {
   StudioCanvasDoc,
   StudioCanvasElement,
@@ -115,6 +117,13 @@ interface CanvasEditorProps {
   onAddToPlaylistChange: (val: boolean) => void;
   mediaImages: Array<{ id: string; title: string; publicUrl: string }>;
   customTemplates: CustomTemplateRecord[];
+  customBackgrounds?: Array<{
+    id: string;
+    name: string;
+    category: string;
+    imageUrl: string;
+  }>;
+  onRefreshBackgrounds?: () => Promise<void>;
   isEditingExisting: boolean;
   savingSlide: boolean;
   onSaveSlide: (doc: StudioCanvasDoc) => Promise<void>;
@@ -157,11 +166,15 @@ export function CanvasEditor({
   onAddToPlaylistChange,
   mediaImages,
   customTemplates,
+  customBackgrounds = [],
+  onRefreshBackgrounds,
   isEditingExisting,
   savingSlide,
   onSaveSlide,
   onSaveAsTemplate,
 }: CanvasEditorProps) {
+  const [uploadingBg, setUploadingBg] = useState(false);
+  const bgUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [doc, setDoc] = useState<StudioCanvasDoc>(() => cloneCanvasDoc(initialDoc));
   const [selectedId, setSelectedId] = useState<string | null>(
     initialDoc.elements[0]?.id ?? null
@@ -1605,25 +1618,159 @@ export function CanvasEditor({
             {/* BACKGROUNDS */}
             {toolTab === "background" && (
               <div className="space-y-3">
-                {/* Official Crown Campaign Banners as Full-Bleed Canvas Background */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
+                {/* Official Crown Campaign Banners + Custom Uploaded Backgrounds */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-1">
                     <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
-                      Crown Banners (Canvas Background)
+                      Canvas Backgrounds ({CROWN_CAMPAIGN_BANNERS.length + customBackgrounds.length})
                     </p>
-                    {doc.backgroundImageUrl && (
+                    <div className="flex items-center gap-2">
+                      {doc.backgroundImageUrl && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            commitDoc({ ...doc, backgroundImageUrl: undefined })
+                          }
+                          className="text-[10px] font-semibold text-red-600 hover:underline"
+                        >
+                          Clear
+                        </button>
+                      )}
+                      <input
+                        ref={bgUploadInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const picked = e.target.files?.[0];
+                          e.target.value = "";
+                          if (!picked) return;
+                          setUploadingBg(true);
+                          try {
+                            const optimized = await optimizeImageForSignage(picked);
+                            const uploadFile = optimized.file;
+                            const buf = await uploadFile.arrayBuffer();
+                            const digest = await crypto.subtle.digest("SHA-256", buf);
+                            const sha256Checksum = Array.from(new Uint8Array(digest))
+                              .map((b) => b.toString(16).padStart(2, "0"))
+                              .join("");
+
+                            const urlRes = await fetch("/api/media/upload-url", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                fileName: uploadFile.name,
+                                mimeType: uploadFile.type || "image/webp",
+                                departmentCode: "BANNERS",
+                                sha256Checksum,
+                                fileSizeBytes: uploadFile.size,
+                              }),
+                            });
+                            const urlJson = (await urlRes.json()) as {
+                              error?: string;
+                              deduplicated?: boolean;
+                              signedUrl?: string;
+                              publicUrl?: string;
+                              storagePath?: string;
+                            };
+                            if (!urlRes.ok || !urlJson.publicUrl) {
+                              toast.error(urlJson.error || "Could not upload background");
+                              return;
+                            }
+                            if (!urlJson.deduplicated && urlJson.signedUrl) {
+                              const putRes = await fetch(urlJson.signedUrl, {
+                                method: "PUT",
+                                headers: { "Content-Type": uploadFile.type || "image/webp" },
+                                body: uploadFile,
+                              });
+                              if (!putRes.ok) {
+                                toast.error("Cloud upload failed");
+                                return;
+                              }
+                            }
+                            const bgName = picked.name
+                              .replace(/\.[^.]+$/, "")
+                              .replace(/[-_]+/g, " ")
+                              .trim() || "Custom Banner";
+                            const saveRes = await fetch("/api/studio-backgrounds", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                name: bgName,
+                                category: "Custom",
+                                imageUrl: urlJson.publicUrl,
+                                storagePath: urlJson.storagePath ?? null,
+                              }),
+                            });
+                            if (!saveRes.ok) {
+                              toast.error("Failed to register custom background");
+                              return;
+                            }
+                            commitDoc({ ...doc, backgroundImageUrl: urlJson.publicUrl });
+                            toast.success(`Uploaded & applied "${bgName}"`);
+                            await onRefreshBackgrounds?.();
+                          } finally {
+                            setUploadingBg(false);
+                          }
+                        }}
+                      />
                       <button
                         type="button"
-                        onClick={() =>
-                          commitDoc({ ...doc, backgroundImageUrl: undefined })
-                        }
-                        className="text-[10px] font-semibold text-red-600 hover:underline"
+                        disabled={uploadingBg}
+                        onClick={() => bgUploadInputRef.current?.click()}
+                        className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
                       >
-                        Clear Image
+                        <Upload className="size-2.5" />
+                        {uploadingBg ? "Uploading..." : "Add BG"}
                       </button>
-                    )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-1.5">
+                    {customBackgrounds.map((bg) => (
+                      <div
+                        key={bg.id}
+                        className={`group relative overflow-hidden rounded-lg border text-left transition ${
+                          doc.backgroundImageUrl === bg.imageUrl
+                            ? "border-zinc-950 ring-2 ring-zinc-950/20"
+                            : "border-zinc-200 hover:border-zinc-400"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            commitDoc({ ...doc, backgroundImageUrl: bg.imageUrl })
+                          }
+                          className="w-full text-left"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={bg.imageUrl}
+                            alt={bg.name}
+                            className="h-12 w-full bg-zinc-100 object-cover"
+                          />
+                          <p className="truncate px-1.5 py-1 text-[10px] font-semibold">
+                            {bg.name}
+                          </p>
+                        </button>
+                        <button
+                          type="button"
+                          title="Delete custom background"
+                          onClick={async (ev) => {
+                            ev.stopPropagation();
+                            const res = await fetch(`/api/studio-backgrounds/${bg.id}`, {
+                              method: "DELETE",
+                            });
+                            if (res.ok) {
+                              toast.success(`Removed "${bg.name}"`);
+                              await onRefreshBackgrounds?.();
+                            }
+                          }}
+                          className="absolute right-1 top-1 hidden rounded bg-white/90 p-0.5 text-zinc-600 shadow-xs hover:text-rose-600 group-hover:block"
+                        >
+                          <Trash2 className="size-3" />
+                        </button>
+                      </div>
+                    ))}
                     {CROWN_CAMPAIGN_BANNERS.map((banner) => (
                       <button
                         key={banner.id}

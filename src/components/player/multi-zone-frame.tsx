@@ -2,23 +2,38 @@
 
 /**
  * @file src/components/player/multi-zone-frame.tsx
- * @description Crown Paints 3-zone Split Canvas layout with a crisp pure-white minimalist
- * showroom sidebar, an innovative 3D tilted product showcase carousel (17 official Crown
- * packshots, zero counter clutter), live EAT clock & Open-Meteo weather, Decorative Range
- * QR (`crownpaints.co.ke/product-category/decorative`), and a taller pure-white bottom
- * ticker anchored by the official Crown Paints logo.
+ * @description Responsive Crown Canvas 3-zone Split Layout supporting Per-Playlist
+ * Sidebar Profiles (custom theme, curated CMS Showcase Products, custom tracked QR,
+ * clock/weather toggles) with fluid viewport scaling so product images always display
+ * in natural, unsqueezed proportions across 32" 720p, 43"-65" 1080p/4K, ultrawide, and
+ * portrait 9:16 TVs.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CloudSun, Droplets, MapPin, Wind } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import type { PlaylistSidebarConfig } from "@/db/schema";
 import {
   CROWN_DECORATIVE_QR_URL,
   CROWN_PRODUCT_SHOWCASE,
+  type CrownProductItem,
 } from "@/lib/crown-products";
 import type { EastAfricaWeather } from "@/lib/weather";
 import { TickerBar } from "./ticker-bar";
+
+export interface ActiveSidebarProfile {
+  id: string;
+  name: string;
+  theme?: string | null;
+  displayName?: string | null;
+  showClock?: boolean;
+  showWeather?: boolean;
+  showQr?: boolean;
+  qrTitle?: string | null;
+  promoLabel?: string | null;
+  qrTargetUrl?: string | null;
+  slideIntervalSeconds?: number;
+}
 
 interface MultiZoneFrameProps {
   children: React.ReactNode;
@@ -30,11 +45,59 @@ interface MultiZoneFrameProps {
   tickerMessages: string[];
   orientation?: "landscape" | "portrait";
   sidebarConfig?: PlaylistSidebarConfig | null;
+  sidebarProfile?: ActiveSidebarProfile | null;
+  showcaseProducts?: CrownProductItem[];
+  qrSignatures?: Record<string, string>;
   screenId?: string;
   branchId?: string;
 }
 
-const PRODUCT_SLIDE_INTERVAL_MS = 5500;
+const THEME_MAP = {
+  white_minimal: {
+    asideBg: "bg-white border-zinc-200 text-zinc-950",
+    cardBg: "border-zinc-200/90 bg-zinc-50/70",
+    stageBg:
+      "border-zinc-200/90 bg-gradient-to-b from-zinc-50/40 via-white to-amber-50/30",
+    titleInk: "text-zinc-950",
+    mutedInk: "text-zinc-500",
+    badgeBg: "border-zinc-200 bg-white text-[#1e2a6e]",
+    qrCardBg: "border-zinc-200/90 bg-zinc-50/70",
+    linkInk: "text-[#1e2a6e]",
+  },
+  warm_editorial: {
+    asideBg: "bg-[#faf7f2] border-amber-200/70 text-stone-950",
+    cardBg: "border-amber-200/70 bg-white/80",
+    stageBg:
+      "border-amber-200/70 bg-gradient-to-b from-white via-[#fffdf9] to-amber-50/50",
+    titleInk: "text-stone-950",
+    mutedInk: "text-stone-500",
+    badgeBg: "border-amber-200 bg-amber-50 text-amber-900",
+    qrCardBg: "border-amber-200/70 bg-white/85",
+    linkInk: "text-amber-900",
+  },
+  navy_dark: {
+    asideBg: "bg-[#0a1329] border-white/10 text-white",
+    cardBg: "border-white/10 bg-white/[0.06]",
+    stageBg:
+      "border-white/10 bg-gradient-to-b from-white/[0.08] via-white/[0.04] to-amber-500/[0.08]",
+    titleInk: "text-white",
+    mutedInk: "text-slate-300",
+    badgeBg: "border-amber-400/30 bg-amber-500/15 text-amber-300",
+    qrCardBg: "border-white/10 bg-white/[0.06]",
+    linkInk: "text-amber-300",
+  },
+  slate_industrial: {
+    asideBg: "bg-slate-900 border-slate-700/70 text-slate-50",
+    cardBg: "border-slate-700/70 bg-slate-800/70",
+    stageBg:
+      "border-slate-700/70 bg-gradient-to-b from-slate-800/80 via-slate-900 to-slate-800/50",
+    titleInk: "text-white",
+    mutedInk: "text-slate-300",
+    badgeBg: "border-sky-400/30 bg-sky-500/15 text-sky-300",
+    qrCardBg: "border-slate-700/70 bg-slate-800/70",
+    linkInk: "text-sky-300",
+  },
+} as const;
 
 export function MultiZoneFrame({
   children,
@@ -46,11 +109,27 @@ export function MultiZoneFrame({
   tickerMessages,
   orientation = "landscape",
   sidebarConfig,
+  sidebarProfile,
+  showcaseProducts,
+  qrSignatures,
   screenId,
   branchId,
 }: MultiZoneFrameProps) {
   const [weather, setWeather] = useState<EastAfricaWeather | null>(null);
   const [productIndex, setProductIndex] = useState(0);
+
+  const products = useMemo(
+    () =>
+      showcaseProducts && showcaseProducts.length > 0
+        ? showcaseProducts
+        : CROWN_PRODUCT_SHOWCASE,
+    [showcaseProducts]
+  );
+
+  const slideIntervalMs = Math.max(
+    3000,
+    (sidebarProfile?.slideIntervalSeconds ?? 6) * 1000
+  );
 
   useEffect(() => {
     let active = true;
@@ -74,19 +153,35 @@ export function MultiZoneFrame({
     };
   }, [city]);
 
-  // Smooth auto-rotating 3D tilted Crown Paints product showcase
+  // Smooth auto-rotating showcase carousel
   useEffect(() => {
+    if (products.length <= 1) return;
     const timer = setInterval(() => {
-      setProductIndex((prev) => (prev + 1) % CROWN_PRODUCT_SHOWCASE.length);
-    }, PRODUCT_SLIDE_INTERVAL_MS);
+      setProductIndex((prev) => (prev + 1) % products.length);
+    }, slideIntervalMs);
     return () => clearInterval(timer);
-  }, []);
+  }, [products.length, slideIntervalMs]);
 
-  const currentProduct = CROWN_PRODUCT_SHOWCASE[productIndex];
-  const nextProduct =
-    CROWN_PRODUCT_SHOWCASE[(productIndex + 1) % CROWN_PRODUCT_SHOWCASE.length];
+  const safeProductIndex = productIndex % Math.max(1, products.length);
+  const currentProduct = products[safeProductIndex] ?? CROWN_PRODUCT_SHOWCASE[0];
 
-  const locationLabel = sidebarConfig?.displayName?.trim() || branchName;
+  const themeKey =
+    sidebarProfile?.theme && sidebarProfile.theme in THEME_MAP
+      ? (sidebarProfile.theme as keyof typeof THEME_MAP)
+      : "white_minimal";
+  const theme = THEME_MAP[themeKey];
+  const isDarkTheme = themeKey === "navy_dark" || themeKey === "slate_industrial";
+
+  const showClock =
+    sidebarProfile?.showClock ?? (sidebarConfig?.showClock !== false);
+  const showWeather =
+    sidebarProfile?.showWeather ?? (sidebarConfig?.showWeather !== false);
+  const showQr = sidebarProfile?.showQr ?? (sidebarConfig?.showQr !== false);
+
+  const locationLabel =
+    sidebarProfile?.displayName?.trim() ||
+    sidebarConfig?.displayName?.trim() ||
+    branchName;
 
   const dateText = new Intl.DateTimeFormat("en-KE", {
     weekday: "short",
@@ -104,16 +199,39 @@ export function MultiZoneFrame({
         ];
 
   const qrDestination =
-    sidebarConfig?.qrTargetUrl?.trim() || CROWN_DECORATIVE_QR_URL;
+    sidebarProfile?.qrTargetUrl?.trim() ||
+    sidebarConfig?.qrTargetUrl?.trim() ||
+    CROWN_DECORATIVE_QR_URL;
 
-  const qrValue =
-    screenId && branchId && typeof window !== "undefined"
-      ? `${window.location.origin}/q/concierge?s=${encodeURIComponent(screenId)}&b=${encodeURIComponent(branchId)}&to=${encodeURIComponent(qrDestination)}`
-      : qrDestination;
-
+  const qrTitle = sidebarProfile?.qrTitle?.trim() || "Explore Decorative Range";
   const promoLabel =
-    sidebarConfig?.promoLabel ||
+    sidebarProfile?.promoLabel?.trim() ||
+    sidebarConfig?.promoLabel?.trim() ||
     "Scan to browse Crown Decorative paints & shades.";
+
+  // Build HMAC-signed auto-tracked QR URL for full scan analytics attribution
+  const qrValue = useMemo(() => {
+    if (typeof window === "undefined") return qrDestination;
+    if (!screenId || !branchId) return qrDestination;
+    const params = new URLSearchParams({
+      s: screenId,
+      b: branchId,
+      src: "sidebar",
+      lbl: qrTitle,
+      to: qrDestination,
+    });
+    const sig = qrSignatures?.[`concierge|${qrDestination}`];
+    if (sig) params.set("sig", sig);
+    return `${window.location.origin}/q/concierge?${params.toString()}`;
+  }, [screenId, branchId, qrDestination, qrTitle, qrSignatures]);
+
+  const qrDisplayHost = (() => {
+    try {
+      return new URL(qrDestination).hostname.replace(/^www\./, "");
+    } catch {
+      return "crownpaints.co.ke";
+    }
+  })();
 
   // Portrait (9:16) Vertical Showroom Totem Layout
   if (orientation === "portrait") {
@@ -124,144 +242,161 @@ export function MultiZoneFrame({
           {children}
         </div>
 
-        {/* Middle Pure-White Showroom Info & Tilted Product Showcase Strip */}
-        <section className="grid shrink-0 grid-cols-3 gap-3 border-t border-zinc-200 bg-white p-3.5">
+        {/* Middle Showroom Info & Natural Product Showcase Strip */}
+        <section
+          className={`grid shrink-0 grid-cols-3 gap-3 border-t p-3.5 ${theme.asideBg}`}
+        >
           {/* Showroom Location + Clock + Weather */}
-          <div className="flex flex-col justify-between rounded-2xl border border-zinc-200 bg-zinc-50/70 p-3">
+          <div
+            className={`flex flex-col justify-between rounded-2xl border p-3 ${theme.cardBg}`}
+          >
             <div>
               <div className="flex items-center justify-between gap-1">
-                <p className="flex items-center gap-1 truncate text-[11px] font-semibold text-zinc-700">
-                  <MapPin className="size-3 shrink-0 text-amber-600" />
+                <p className="flex items-center gap-1 truncate text-[11px] font-semibold">
+                  <MapPin className="size-3 shrink-0 text-amber-500" />
                   <span className="truncate">{locationLabel}</span>
                 </p>
-                <span className="shrink-0 rounded-full border border-zinc-200 bg-white px-1.5 py-0.5 font-mono text-[9px] font-semibold text-zinc-600">
+                <span className="shrink-0 rounded-full border border-current/15 px-1.5 py-0.5 font-mono text-[9px] font-semibold opacity-80">
                   {countryCode}
                 </span>
               </div>
-              <p className="mt-1 font-mono text-2xl font-black tabular-nums text-zinc-950">
-                {clockText}{" "}
-                <span className="text-[10px] font-semibold text-zinc-400">
-                  EAT
+              {showClock && (
+                <>
+                  <p className="mt-1 font-mono text-2xl font-black tabular-nums">
+                    {clockText}
+                  </p>
+                  <p className={`text-[10px] ${theme.mutedInk}`}>{dateText}</p>
+                </>
+              )}
+            </div>
+            {showWeather && (
+              <div className="mt-2 flex items-center justify-between border-t border-current/10 pt-1.5 text-[10px]">
+                <span className="flex items-center gap-1 truncate font-semibold">
+                  <CloudSun className="size-3.5 text-amber-500" />
+                  {weather ? `${weather.temperatureC}°C` : "24°C"}
                 </span>
-              </p>
-              <p className="text-[10px] text-zinc-500">{dateText}</p>
-            </div>
-            <div className="mt-2 flex items-center justify-between border-t border-zinc-200 pt-1.5 text-[10px] text-zinc-600">
-              <span className="flex items-center gap-1 truncate font-semibold text-zinc-900">
-                <CloudSun className="size-3.5 text-amber-500" />
-                {weather ? `${weather.temperatureC}°C` : "24°C"}
-              </span>
-              <span className="truncate text-zinc-500">
-                {weather?.city || city}
-              </span>
-            </div>
+                <span className={`truncate ${theme.mutedInk}`}>
+                  {weather?.city || city}
+                </span>
+              </div>
+            )}
           </div>
 
-          {/* Tilted Crown Product Card */}
-          <div className="relative flex items-center gap-2.5 overflow-hidden rounded-2xl border border-zinc-200 bg-white p-3 shadow-2xs">
-            <div className="relative flex h-16 w-14 shrink-0 items-center justify-center">
-              <div className="absolute bottom-0 h-2.5 w-11 rounded-full bg-zinc-900/15 blur-sm" />
+          {/* Natural Proportions Product Card */}
+          <div
+            className={`relative flex items-center gap-3 overflow-hidden rounded-2xl border p-3 ${theme.stageBg}`}
+          >
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl bg-white/70 p-1.5">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 key={currentProduct.id}
                 src={currentProduct.imageUrl}
                 alt={currentProduct.name}
-                className="animate-crown-product-hero relative z-10 max-h-16 w-auto object-contain drop-shadow-[0_6px_10px_rgba(0,0,0,0.18)]"
+                className="h-auto max-h-full w-auto max-w-full object-contain drop-shadow-[0_4px_8px_rgba(0,0,0,0.16)]"
               />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[9px] font-bold uppercase tracking-wider text-blue-700">
+              <p className="truncate text-[9px] font-bold uppercase tracking-wider text-blue-600">
                 {currentProduct.category}
               </p>
-              <p className="truncate text-xs font-bold text-zinc-950">
+              <p className={`truncate text-xs font-bold ${theme.titleInk}`}>
                 {currentProduct.name}
               </p>
-              <p className="line-clamp-2 text-[10px] leading-tight text-zinc-500">
+              <p
+                className={`line-clamp-2 text-[10px] leading-tight ${theme.mutedInk}`}
+              >
                 {currentProduct.tagline}
               </p>
             </div>
           </div>
 
-          {/* Decorative Range QR */}
-          <div className="flex items-center gap-2.5 rounded-2xl border border-zinc-200 bg-zinc-50/70 p-3">
-            <div className="shrink-0 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-2xs">
-              <QRCodeSVG value={qrValue} size={50} />
+          {/* Tracked QR Card */}
+          {showQr && (
+            <div
+              className={`flex items-center gap-2.5 rounded-2xl border p-3 ${theme.qrCardBg}`}
+            >
+              <div className="shrink-0 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-2xs">
+                <QRCodeSVG value={qrValue} size={52} />
+              </div>
+              <div className="min-w-0">
+                <p className={`truncate text-[11px] font-bold ${theme.titleInk}`}>
+                  {qrTitle}
+                </p>
+                <p
+                  className={`mt-0.5 line-clamp-2 text-[10px] leading-tight ${theme.mutedInk}`}
+                >
+                  {promoLabel}
+                </p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="text-[11px] font-bold text-zinc-950">
-                Decorative Range
-              </p>
-              <p className="mt-0.5 line-clamp-2 text-[10px] leading-tight text-zinc-500">
-                {promoLabel}
-              </p>
-            </div>
-          </div>
+          )}
         </section>
 
-        {/* Crisp Pure-White Bottom Ticker with Official Crown Paints Logo & Icons */}
         <TickerBar messages={tickerContent} compact />
       </div>
     );
   }
 
-  // Landscape (16:9) Crisp Pure-White Showroom Split Canvas Layout
+  // Landscape (16:9 / 4K / Ultrawide / 720p) Fluid Responsive Split Layout
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-white text-zinc-950">
-      {/* Top Split Area */}
-      <div className="grid min-h-0 flex-1 grid-cols-12">
-        {/* Main Zone (75% = 9 cols) */}
-        <div className="relative col-span-9 h-full min-h-0 overflow-hidden bg-black">
+      {/* Top Split Area: Fluid Primary Stage + Proportional Non-Squeezing Sidebar */}
+      <div className="flex min-h-0 flex-1">
+        {/* Main Primary Stage */}
+        <div className="relative h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-black">
           {children}
         </div>
 
-        {/* Right Pure-White Minimalist Showroom Sidebar (25% = 3 cols) */}
-        <aside className="col-span-3 flex h-full min-h-0 flex-col gap-3 border-l border-zinc-200 bg-white p-4">
-          {/* 1. Clean Clock, Location & Weather Card (No Playlist Name) */}
-          {(sidebarConfig?.showClock !== false ||
-            sidebarConfig?.showWeather !== false) && (
-            <div className="shrink-0 rounded-2xl border border-zinc-200/90 bg-zinc-50/70 p-3.5">
+        {/* Right Responsive Showroom Sidebar: clamp width keeps 32" 720p & 65" 4K balanced */}
+        <aside
+          className={`flex h-full min-h-0 w-[clamp(260px,24vw,430px)] shrink-0 flex-col gap-2.5 border-l p-3 xl:gap-3 xl:p-4 ${theme.asideBg}`}
+        >
+          {/* 1. Compact Clock, Location & Weather Card */}
+          {(showClock || showWeather) && (
+            <div
+              className={`shrink-0 rounded-2xl border p-3 xl:p-3.5 ${theme.cardBg}`}
+            >
               <div className="flex items-center justify-between gap-2">
-                <p className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-zinc-700">
-                  <MapPin className="size-3.5 shrink-0 text-amber-600" />
+                <p className="flex min-w-0 items-center gap-1.5 text-[clamp(11px,0.85vw,13px)] font-semibold">
+                  <MapPin className="size-3.5 shrink-0 text-amber-500" />
                   <span className="truncate">{locationLabel}</span>
                 </p>
-                <span className="shrink-0 rounded-full border border-zinc-200 bg-white px-2 py-0.5 font-mono text-[10px] font-semibold uppercase text-zinc-600">
+                <span className="shrink-0 rounded-full border border-current/15 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase opacity-80">
                   {countryCode}
                 </span>
               </div>
 
-              {sidebarConfig?.showClock !== false && (
-                <div className="mt-2 flex items-baseline justify-between gap-2">
-                  <p className="font-mono text-3xl font-black tabular-nums tracking-tight text-zinc-950">
+              {showClock && (
+                <div className="mt-1.5 flex items-baseline justify-between gap-2">
+                  <p className="font-mono text-[clamp(22px,2vw,34px)] font-black tabular-nums leading-none tracking-tight">
                     {clockText}
-                    <span className="ml-1.5 text-[11px] font-semibold text-zinc-400">
-                      EAT
-                    </span>
                   </p>
-                  <p className="text-[11px] font-medium text-zinc-500">
+                  <p className={`text-[11px] font-medium ${theme.mutedInk}`}>
                     {dateText}
                   </p>
                 </div>
               )}
 
-              {sidebarConfig?.showWeather !== false && (
-                <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-zinc-200/80 pt-2 text-[11px] text-zinc-600">
+              {showWeather && (
+                <div className="mt-2 flex items-center justify-between gap-2 border-t border-current/10 pt-1.5 text-[11px]">
                   <div className="flex min-w-0 items-center gap-1.5">
-                    <CloudSun className="size-4 shrink-0 text-amber-500" />
-                    <span className="font-bold tabular-nums text-zinc-950">
+                    <CloudSun className="size-3.5 shrink-0 text-amber-500" />
+                    <span className="font-bold tabular-nums">
                       {weather ? `${weather.temperatureC}°C` : "24°C"}
                     </span>
-                    <span className="truncate text-zinc-500">
+                    <span className={`truncate ${theme.mutedInk}`}>
                       {weather?.condition || "Partly Cloudy"}
                     </span>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2 text-[10px] text-zinc-500">
+                  <div
+                    className={`flex shrink-0 items-center gap-2 text-[10px] ${theme.mutedInk}`}
+                  >
                     <span className="flex items-center gap-0.5">
                       <Droplets className="size-3 text-sky-500" />
                       {weather?.humidityPercent ?? 58}%
                     </span>
                     <span className="flex items-center gap-0.5">
-                      <Wind className="size-3 text-emerald-600" />
+                      <Wind className="size-3 text-emerald-500" />
                       {weather?.windKmh ?? 12}
                     </span>
                   </div>
@@ -270,88 +405,98 @@ export function MultiZoneFrame({
             </div>
           )}
 
-          {/* 2. Innovative 3D Tilted Crown Paints Product Showcase (Pure White, Zero Counter Clutter) */}
-          <div className="relative flex min-h-0 flex-1 flex-col justify-between overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-b from-zinc-50/50 via-white to-amber-50/35 p-4">
-            {/* Subtle decorative editorial spotlight halo */}
-            <div className="pointer-events-none absolute -right-10 -top-10 size-40 rounded-full bg-amber-400/12 blur-2xl" />
-            <div className="pointer-events-none absolute -left-8 bottom-14 size-32 rounded-full bg-blue-900/5 blur-2xl" />
+          {/* 2. Natural-Proportion Product Showcase Stage (Zero Squeezing Across All TV Sizes) */}
+          <div
+            className={`relative flex min-h-[160px] flex-1 flex-col justify-between overflow-hidden rounded-2xl border p-3.5 xl:p-4 ${theme.stageBg}`}
+          >
+            {/* Subtle ambient spotlight */}
+            <div className="pointer-events-none absolute -right-10 -top-10 size-36 rounded-full bg-amber-400/12 blur-2xl" />
 
-            {/* Category Eyebrow Pill (no 1/17 counter) */}
-            <div className="relative z-10 flex items-center justify-between">
+            {/* Badge Header Pill */}
+            <div className="relative z-10 flex shrink-0 items-center justify-between">
               <span
                 key={`cat-${currentProduct.id}`}
-                className="animate-crown-slide inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#1e2a6e] shadow-2xs"
+                className={`animate-crown-slide inline-flex max-w-full items-center gap-1.5 truncate rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider shadow-2xs ${theme.badgeBg}`}
               >
-                <span className="size-1.5 rounded-full bg-amber-500" />
-                {currentProduct.category}
+                <span className="size-1.5 shrink-0 rounded-full bg-amber-500" />
+                <span className="truncate">{currentProduct.category}</span>
               </span>
             </div>
 
-            {/* Layered 3D Slanted Gallery Stage */}
-            <div className="relative my-2 flex min-h-0 flex-1 items-center justify-center">
-              {/* Soft elliptical studio floor shadow */}
-              <div className="pointer-events-none absolute bottom-1 h-4 w-36 rounded-full bg-zinc-900/12 blur-md" />
-
-              {/* Soft abstract blurred silhouette of next product for ambient depth (unreadable) */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                key={`peek-${nextProduct.id}`}
-                src={nextProduct.imageUrl}
-                alt=""
-                aria-hidden="true"
-                className="pointer-events-none absolute right-0 max-h-[60%] max-w-[48%] translate-x-8 translate-y-3 rotate-[14deg] scale-75 object-contain opacity-[0.1] blur-[8px] saturate-50 transition-all duration-700"
+            {/* Unobstructed Natural Aspect-Ratio Product Stage */}
+            <div className="relative my-2 flex min-h-0 flex-1 items-center justify-center overflow-hidden p-2">
+              <div
+                className={`pointer-events-none absolute bottom-1 h-3.5 w-2/3 max-w-[160px] rounded-full blur-md ${
+                  isDarkTheme ? "bg-black/45" : "bg-zinc-900/12"
+                }`}
               />
-
-              {/* Active hero paint tin in signature slanted levitation */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 key={`hero-${currentProduct.id}`}
                 src={currentProduct.imageUrl}
                 alt={currentProduct.name}
-                className="animate-crown-product-hero relative z-10 max-h-[92%] max-w-[78%] object-contain drop-shadow-[0_18px_24px_rgba(15,23,42,0.22)]"
+                className="animate-crown-slide relative z-10 h-auto max-h-full w-auto max-w-full object-contain drop-shadow-[0_14px_20px_rgba(15,23,42,0.2)] transition-transform duration-500"
               />
             </div>
 
-            {/* Crisp Editorial Product Caption + Thin Sweep Bar */}
-            <div className="relative z-10 space-y-2">
+            {/* Product Name + Description + Sweep Progress */}
+            <div className="relative z-10 shrink-0 space-y-2">
               <div
                 key={`meta-${currentProduct.id}`}
                 className="animate-crown-slide"
               >
-                <p className="truncate text-[16px] font-extrabold tracking-tight text-zinc-950">
+                <p
+                  className={`truncate text-[clamp(14px,1.15vw,18px)] font-extrabold tracking-tight ${theme.titleInk}`}
+                >
                   {currentProduct.name}
                 </p>
-                <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-zinc-500">
-                  {currentProduct.tagline}
-                </p>
+                {currentProduct.tagline && (
+                  <p
+                    className={`mt-0.5 line-clamp-2 text-[clamp(10px,0.78vw,12px)] leading-snug ${theme.mutedInk}`}
+                  >
+                    {currentProduct.tagline}
+                  </p>
+                )}
               </div>
-              <div className="h-[3px] w-full overflow-hidden rounded-full bg-zinc-100">
+              <div
+                className={`h-[3px] w-full overflow-hidden rounded-full ${
+                  isDarkTheme ? "bg-white/15" : "bg-zinc-200/80"
+                }`}
+              >
                 <div
                   key={`bar-${currentProduct.id}`}
                   className="animate-crown-progress h-full w-full rounded-full bg-gradient-to-r from-[#1e2a6e] via-amber-500 to-amber-400"
                   style={{
-                    animationDuration: `${PRODUCT_SLIDE_INTERVAL_MS}ms`,
+                    animationDuration: `${slideIntervalMs}ms`,
                   }}
                 />
               </div>
             </div>
           </div>
 
-          {/* 3. Decorative Range QR Card (Pure White) */}
-          {sidebarConfig?.showQr !== false && (
-            <div className="flex shrink-0 items-center gap-3 rounded-2xl border border-zinc-200/90 bg-zinc-50/70 p-3">
+          {/* 3. Auto-Tracked Signed QR Attribution Card */}
+          {showQr && (
+            <div
+              className={`flex shrink-0 items-center gap-3 rounded-2xl border p-2.5 xl:p-3 ${theme.qrCardBg}`}
+            >
               <div className="shrink-0 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-2xs">
-                <QRCodeSVG value={qrValue} size={62} />
+                <QRCodeSVG value={qrValue} size={58} />
               </div>
               <div className="min-w-0">
-                <p className="text-xs font-bold text-zinc-950">
-                  Explore Decorative Range
+                <p
+                  className={`truncate text-xs font-bold ${theme.titleInk}`}
+                >
+                  {qrTitle}
                 </p>
-                <p className="mt-0.5 text-[11px] leading-snug text-zinc-500">
+                <p
+                  className={`mt-0.5 line-clamp-2 text-[11px] leading-snug ${theme.mutedInk}`}
+                >
                   {promoLabel}
                 </p>
-                <p className="mt-1 truncate font-mono text-[9px] font-medium text-[#1e2a6e]">
-                  crownpaints.co.ke
+                <p
+                  className={`mt-1 truncate font-mono text-[9px] font-medium ${theme.linkInk}`}
+                >
+                  {qrDisplayHost}
                 </p>
               </div>
             </div>
@@ -359,7 +504,7 @@ export function MultiZoneFrame({
         </aside>
       </div>
 
-      {/* Bottom Ticker Zone — Crisp Pure White Bar (64px) with Official Logo & Rich Icons */}
+      {/* Bottom Ticker Zone */}
       <TickerBar messages={tickerContent} />
     </div>
   );

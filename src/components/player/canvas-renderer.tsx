@@ -130,6 +130,8 @@ interface CanvasRendererProps {
   screenId?: string;
   branchId?: string;
   quickPostId?: string;
+  slideTitle?: string;
+  qrSignatures?: Record<string, string>;
   interactive?: boolean;
   selectedId?: string | null;
   zoom?: number | "fit";
@@ -151,6 +153,8 @@ export function CanvasRenderer({
   screenId,
   branchId,
   quickPostId,
+  slideTitle,
+  qrSignatures,
   interactive = false,
   selectedId = null,
   zoom = "fit",
@@ -379,16 +383,23 @@ export function CanvasRenderer({
     window.addEventListener("pointerup", onUp);
   }
 
-  function buildQrValue(rawUrl?: string): string {
+  function buildQrValue(rawUrl?: string, qrLabel?: string): string {
     const target = rawUrl?.trim() || "https://www.crownpaints.co.ke";
     if (!screenId || !branchId || typeof window === "undefined") return target;
+    const shortCode = quickPostId ? quickPostId.slice(0, 32) : "studio";
     const params = new URLSearchParams({
       s: screenId,
       b: branchId,
+      src: "studio_slide",
+      lbl: (qrLabel?.trim() || slideTitle?.trim() || "Studio Slide QR").slice(0, 120),
       to: target,
     });
-    if (quickPostId) params.set("q", quickPostId);
-    return `${window.location.origin}/q/studio?${params.toString()}`;
+    if (quickPostId) params.set("p", quickPostId);
+    const sig =
+      qrSignatures?.[`${shortCode}|${target}`] ??
+      qrSignatures?.[`studio|${target}`];
+    if (sig) params.set("sig", sig);
+    return `${window.location.origin}/q/${encodeURIComponent(shortCode)}?${params.toString()}`;
   }
 
   function renderShapeBody(el: StudioCanvasElement) {
@@ -1180,7 +1191,7 @@ export function CanvasRenderer({
             }}
           >
             <div className="rounded-[18px] bg-white p-4 shadow-sm">
-              <QRCodeSVG value={buildQrValue(el.qrUrl)} size={200} />
+              <QRCodeSVG value={buildQrValue(el.qrUrl, el.qrLabel)} size={200} />
             </div>
             <p
               className="truncate font-bold"

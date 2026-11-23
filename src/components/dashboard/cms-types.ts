@@ -175,12 +175,49 @@ export interface OverrideItem {
   createdAt?: string;
 }
 
+export interface ShowcaseProductItem {
+  id: string;
+  name: string;
+  badgeHeader: string;
+  description: string;
+  imageUrl: string;
+  storagePath?: string | null;
+  sortOrder: number;
+  isActive: boolean;
+}
+
+export interface SidebarProfileItem {
+  id: string;
+  name: string;
+  description: string | null;
+  theme: "white_minimal" | "warm_editorial" | "navy_dark" | "slate_industrial" | string;
+  displayName: string | null;
+  showClock: boolean;
+  showWeather: boolean;
+  showQr: boolean;
+  qrTitle: string | null;
+  promoLabel: string | null;
+  qrTargetUrl: string | null;
+  slideIntervalSeconds: number;
+  productIds: string[];
+  isDefault: boolean;
+}
+
+export interface StudioBackgroundItem {
+  id: string;
+  name: string;
+  category: string;
+  imageUrl: string;
+  storagePath?: string | null;
+}
+
 export interface PlaylistRecord {
   id: string;
   name: string;
   description: string | null;
   departmentId: string;
   layoutId?: string | null;
+  sidebarProfileId?: string | null;
   tickerText?: string | null;
   sidebarConfig?: PlaylistSidebarConfig | null;
   isActive: boolean;
@@ -219,8 +256,13 @@ export interface TelemetrySummary {
   recentQrScans: Array<{
     id: string;
     shortCode: string;
+    sourceType?: string | null;
+    campaignLabel?: string | null;
+    screenId?: string | null;
     branchId: string | null;
+    quickPostId?: string | null;
     targetUrl: string;
+    userAgent?: string | null;
     scannedAt: string;
   }>;
 }
@@ -340,6 +382,9 @@ export interface OverviewPayload {
   mediaAssets: MediaAssetItem[];
   quickPosts: QuickPostItem[];
   customTemplates?: CustomTemplateRecord[];
+  showcaseProducts?: ShowcaseProductItem[];
+  sidebarProfiles?: SidebarProfileItem[];
+  studioBackgrounds?: StudioBackgroundItem[];
   layouts: LayoutRecord[];
   playlists: PlaylistRecord[];
   schedules: ScheduleItem[];

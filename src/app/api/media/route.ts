@@ -57,7 +57,8 @@ export async function POST(request: Request) {
 
     const autoApproved = canAutoApproveContent(session);
     const isExternal =
-      parsed.data.mediaType === "web_url" || parsed.data.mediaType === "pdf";
+      !parsed.data.storagePath &&
+      (parsed.data.mediaType === "web_url" || parsed.data.mediaType === "pdf");
 
     const computedChecksum =
       parsed.data.sha256Checksum ??

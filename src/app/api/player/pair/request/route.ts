@@ -2,6 +2,11 @@ import { z } from "zod";
 import { eq, sql } from "drizzle-orm";
 import { db, isDatabaseConfigured, pairingCodes } from "@/db";
 import { generatePairingPin } from "@/lib/security";
+import {
+  checkRateLimit,
+  getClientIp,
+  rateLimitExceededResponse,
+} from "@/lib/rate-limit";
 
 const pairRequestSchema = z.object({
   hardwareType: z.enum(["android_tv", "mini_pc", "other"]).default("android_tv"),
@@ -9,6 +14,9 @@ const pairRequestSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const rl = checkRateLimit(`pair_req:${getClientIp(request)}`, 20, 60_000);
+  if (!rl.allowed) return rateLimitExceededResponse(rl.retryAfterSeconds);
+
   if (!isDatabaseConfigured()) {
     return Response.json(
       {

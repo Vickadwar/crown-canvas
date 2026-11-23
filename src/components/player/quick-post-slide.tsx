@@ -31,6 +31,7 @@ interface QuickPostSlideProps {
   screenId?: string;
   branchId?: string;
   quickPostId?: string;
+  qrSignatures?: Record<string, string>;
   compact?: boolean;
 }
 
@@ -71,6 +72,7 @@ function getInitials(name?: string): string {
 }
 
 export function QuickPostSlide({
+  title,
   departmentName,
   templateType,
   config,
@@ -79,6 +81,7 @@ export function QuickPostSlide({
   screenId,
   branchId,
   quickPostId,
+  qrSignatures,
   compact = false,
 }: QuickPostSlideProps) {
   if (config.canvasDoc && config.canvasDoc.elements.length > 0) {
@@ -88,6 +91,8 @@ export function QuickPostSlide({
         screenId={screenId}
         branchId={branchId}
         quickPostId={quickPostId}
+        slideTitle={title}
+        qrSignatures={qrSignatures}
         className={compact ? "rounded-xl" : ""}
       />
     );
@@ -129,13 +134,18 @@ export function QuickPostSlide({
     if (!screenId || !branchId || typeof window === "undefined") {
       return config.qrUrl;
     }
+    const shortCode = quickPostId ? quickPostId.slice(0, 32) : "slide";
     const params = new URLSearchParams({
       s: screenId,
       b: branchId,
+      src: "quick_post",
+      lbl: (config.qrLabel || title || "Slide QR").slice(0, 120),
       to: config.qrUrl,
     });
     if (quickPostId) params.set("p", quickPostId);
-    return `${window.location.origin}/q/${quickPostId || "slide"}?${params.toString()}`;
+    const sig = qrSignatures?.[`${shortCode}|${config.qrUrl}`];
+    if (sig) params.set("sig", sig);
+    return `${window.location.origin}/q/${encodeURIComponent(shortCode)}?${params.toString()}`;
   })();
 
   return (

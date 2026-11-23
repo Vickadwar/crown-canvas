@@ -31,7 +31,9 @@ import {
   Globe,
   GripVertical,
   Image as ImageIcon,
+  LayoutPanelLeft,
   ListVideo,
+  Package,
   Plus,
   Search,
   Sparkles,
@@ -53,6 +55,10 @@ import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { TaglineBuilder } from "@/components/dashboard/tagline-builder";
+import {
+  ShowcaseProductsPanel,
+  SidebarProfilesPanel,
+} from "@/components/dashboard/sidebar-designer-panel";
 import type {
   OverviewPayload,
   PlaylistItemRecord,
@@ -184,6 +190,11 @@ export function PlaylistsTab({
   onRefresh,
 }: PlaylistsTabProps) {
   const confirm = useConfirm();
+  const [subTab, setSubTab] = useState<"playlists" | "sidebars" | "products">(
+    "playlists"
+  );
+  const [editProfileId, setEditProfileId] = useState<string | null>(null);
+  const [autoCreatingSidebar, setAutoCreatingSidebar] = useState(false);
   const [searchPl, setSearchPl] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -363,11 +374,99 @@ export function PlaylistsTab({
     );
   }
 
+  async function handleAutoCreateSidebarForPlaylist(pl: PlaylistRecord) {
+    setAutoCreatingSidebar(true);
+    try {
+      const res = await fetch("/api/sidebar-profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: `${pl.name} Sidebar`,
+          theme: "white_minimal",
+          attachToPlaylistId: pl.id,
+        }),
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        profile?: { id: string; name: string };
+      };
+      if (!res.ok || !json.profile) {
+        toast.error(json.error || "Could not create sidebar for playlist");
+        return;
+      }
+      toast.success(`Created & attached "${json.profile.name}" to "${pl.name}"`);
+      await onRefresh();
+      setEditProfileId(json.profile.id);
+      setSubTab("sidebars");
+    } finally {
+      setAutoCreatingSidebar(false);
+    }
+  }
+
   const sortableKeys = (activePlaylist?.items ?? []).map(
     (it, idx) => it.id ?? `idx-${idx}`
   );
 
+  const sidebarProfiles = data.sidebarProfiles ?? [];
+  const showcaseProductsCount = (data.showcaseProducts ?? []).length;
+
   return (
+    <div className="space-y-4">
+      {/* Sub-navigation: Playlists | Sidebar Profiles | Showcase Products */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white p-3 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+        <div className="inline-flex rounded-lg border border-zinc-200 bg-zinc-50 p-1">
+          {[
+            {
+              id: "playlists" as const,
+              label: `Playlists (${data.playlists.length})`,
+              icon: ListVideo,
+            },
+            {
+              id: "sidebars" as const,
+              label: `Sidebar Profiles (${sidebarProfiles.length})`,
+              icon: LayoutPanelLeft,
+            },
+            {
+              id: "products" as const,
+              label: `Showcase Products (${showcaseProductsCount})`,
+              icon: Package,
+            },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const active = subTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setSubTab(tab.id)}
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                  active
+                    ? "bg-white text-zinc-950 shadow-2xs ring-1 ring-zinc-200/80"
+                    : "text-zinc-500 hover:text-zinc-900"
+                }`}
+              >
+                <Icon className="size-3.5" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-xs text-zinc-500">
+          Attach a unique Sidebar Profile to each playlist or customize products rotating on split-screen TVs.
+        </p>
+      </div>
+
+      {subTab === "sidebars" ? (
+        <SidebarProfilesPanel
+          key={editProfileId ?? "list"}
+          data={data}
+          initialEditProfileId={editProfileId}
+          onClearInitialEdit={() => setEditProfileId(null)}
+          onRefresh={onRefresh}
+        />
+      ) : subTab === "products" ? (
+        <ShowcaseProductsPanel data={data} onRefresh={onRefresh} />
+      ) : (
     <div className="grid gap-5 lg:grid-cols-12">
       {/* LEFT RAIL: Playlists Directory */}
       <Card className="lg:col-span-4">
@@ -558,6 +657,38 @@ export function PlaylistsTab({
                       ]}
                     />
                   </div>
+                  <div className="w-48">
+                    <ModernSelect
+                      size="sm"
+                      value={activePlaylist.sidebarProfileId ?? ""}
+                      onValueChange={(v) =>
+                        void handlePatchPlaylist(
+                          activePlaylist.id,
+                          { sidebarProfileId: v || null },
+                          "Attached sidebar profile & pushed to TVs"
+                        )
+                      }
+                      options={[
+                        { value: "", label: "Default Sidebar" },
+                        ...sidebarProfiles.map((sp) => ({
+                          value: sp.id,
+                          label: sp.name,
+                        })),
+                      ]}
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={autoCreatingSidebar}
+                    title="Auto-create a dedicated custom sidebar and attach it to this playlist"
+                    onClick={() =>
+                      void handleAutoCreateSidebarForPlaylist(activePlaylist)
+                    }
+                  >
+                    <LayoutPanelLeft className="size-3.5 text-blue-600" />
+                    {autoCreatingSidebar ? "Creating..." : "Auto-Create Sidebar"}
+                  </Button>
                   <Button
                     size="sm"
                     variant="outline"
@@ -818,6 +949,8 @@ export function PlaylistsTab({
           </>
         )}
       </Card>
+    </div>
+      )}
     </div>
   );
 }

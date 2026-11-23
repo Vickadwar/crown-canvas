@@ -9,6 +9,7 @@ import { z } from "zod";
 import { db, isDatabaseConfigured, dataFeeds, withDbRetry } from "@/db";
 import { requireAdminAccess } from "@/lib/auth-guard";
 import { hashDeviceToken } from "@/lib/security";
+import { assertSafeExternalUrl } from "@/lib/url-security";
 import { broadcastFleetSignal } from "@/lib/realtime";
 import { recordAuditLog } from "@/lib/audit";
 
@@ -47,15 +48,23 @@ export async function PATCH(
 
     let pulledPayload: Record<string, unknown> | undefined;
     if (parsed.data.pullUrl) {
-      const targetUrl = new URL(parsed.data.pullUrl);
-      if (targetUrl.protocol !== "https:" && targetUrl.protocol !== "http:") {
+      let targetUrl: URL;
+      try {
+        targetUrl = await assertSafeExternalUrl(parsed.data.pullUrl);
+      } catch (secErr) {
         return Response.json(
-          { error: "Only HTTP/HTTPS URLs are supported for pull sync." },
+          {
+            error:
+              secErr instanceof Error
+                ? secErr.message
+                : "Blocked unsafe external URL",
+          },
           { status: 400 }
         );
       }
       const remoteRes = await fetch(targetUrl.toString(), {
         headers: { Accept: "application/json" },
+        redirect: "error",
         signal: AbortSignal.timeout(8000),
       });
       if (!remoteRes.ok) {
@@ -64,7 +73,14 @@ export async function PATCH(
           { status: 502 }
         );
       }
-      const json = (await remoteRes.json()) as unknown;
+      const rawText = await remoteRes.text();
+      if (rawText.length > 2 * 1024 * 1024) {
+        return Response.json(
+          { error: "Remote JSON payload exceeds 2 MB safety limit." },
+          { status: 413 }
+        );
+      }
+      const json = JSON.parse(rawText) as unknown;
       if (!json || typeof json !== "object" || Array.isArray(json)) {
         pulledPayload = { items: json };
       } else {

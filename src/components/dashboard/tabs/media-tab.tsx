@@ -317,18 +317,27 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
           return;
         }
         setUploadPhase("saving");
+        const isPdfUpload =
+          uploadFile.type === "application/pdf" ||
+          uploadFile.name.toLowerCase().endsWith(".pdf");
         const saveRes = await fetch("/api/media", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             title: title.trim(),
-            mediaType: uploadFile.type.startsWith("video/") ? "video" : "image",
+            mediaType: uploadFile.type.startsWith("video/")
+              ? "video"
+              : isPdfUpload
+                ? "pdf"
+                : "image",
             storagePath: urlJson.storagePath,
             publicUrl: urlJson.publicUrl,
-            mimeType: uploadFile.type || "video/mp4",
+            mimeType:
+              uploadFile.type ||
+              (isPdfUpload ? "application/pdf" : "video/mp4"),
             fileSizeBytes: uploadFile.size,
             sha256Checksum,
-            durationSeconds,
+            durationSeconds: isPdfUpload ? Math.max(durationSeconds, 25) : durationSeconds,
             departmentId: deptId,
           }),
           signal: controller.signal,
@@ -563,8 +572,8 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
             type="button"
             onClick={() => setTypeFilter(pill.id)}
             className={`rounded-full px-3.5 py-1 text-xs font-medium transition ${typeFilter === pill.id
-                ? "bg-zinc-950 text-white"
-                : "border border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
+              ? "bg-zinc-950 text-white"
+              : "border border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
               }`}
           >
             {pill.label}
@@ -582,8 +591,8 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                   type="button"
                   onClick={() => setAddMode("upload")}
                   className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium ${addMode === "upload"
-                      ? "bg-white text-zinc-950 shadow-2xs"
-                      : "text-zinc-500 hover:text-zinc-900"
+                    ? "bg-white text-zinc-950 shadow-2xs"
+                    : "text-zinc-500 hover:text-zinc-900"
                     }`}
                 >
                   <Upload className="size-3.5" />
@@ -593,8 +602,8 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                   type="button"
                   onClick={() => setAddMode("url")}
                   className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium ${addMode === "url"
-                      ? "bg-white text-zinc-950 shadow-2xs"
-                      : "text-zinc-500 hover:text-zinc-900"
+                    ? "bg-white text-zinc-950 shadow-2xs"
+                    : "text-zinc-500 hover:text-zinc-900"
                     }`}
                 >
                   <Globe className="size-3.5" />
@@ -637,10 +646,10 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label className="text-xs">Video (MP4/MOV/WebM/MKV) or Image</Label>
+                    <Label className="text-xs">Video (MP4/MOV/WebM), Image, or PDF</Label>
                     <Input
                       type="file"
-                      accept="video/*,image/*"
+                      accept="video/*,image/*,application/pdf,.pdf"
                       className="h-8 text-xs"
                       disabled={uploading}
                       onChange={(e) => {
@@ -705,8 +714,8 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
 
                         <p
                           className={`rounded-lg px-2.5 py-1.5 text-xs ${compat.level === "optimal"
-                              ? "bg-emerald-50 text-emerald-700"
-                              : "bg-white/80 text-blue-900"
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "bg-white/80 text-blue-900"
                             }`}
                         >
                           {compat.tvReady ? "✓ " : "⚡ "}
@@ -741,8 +750,8 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                                 className="h-full rounded-full bg-blue-600 transition-all duration-200"
                                 style={{
                                   width: `${uploadPhase === "compressing"
-                                      ? Math.max(4, compressionProgress?.percent ?? 4)
-                                      : 100
+                                    ? Math.max(4, compressionProgress?.percent ?? 4)
+                                    : 100
                                     }%`,
                                 }}
                               />
@@ -774,8 +783,8 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                               )
                             }
                             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition ${selected
-                                ? "bg-zinc-950 text-white"
-                                : "border border-zinc-200 bg-white text-zinc-700 hover:border-zinc-400"
+                              ? "bg-zinc-950 text-white"
+                              : "border border-zinc-200 bg-white text-zinc-700 hover:border-zinc-400"
                               }`}
                           >
                             {selected && <Check className="size-3" />}
@@ -1045,8 +1054,8 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                                   void handleToggleAssetInPlaylist(asset, pl)
                                 }
                                 className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs transition ${active
-                                    ? "bg-zinc-950 font-medium text-white"
-                                    : "bg-white text-zinc-700 hover:bg-zinc-100"
+                                  ? "bg-zinc-950 font-medium text-white"
+                                  : "bg-white text-zinc-700 hover:bg-zinc-100"
                                   }`}
                               >
                                 <span className="truncate">{pl.name}</span>

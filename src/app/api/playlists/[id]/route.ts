@@ -6,6 +6,7 @@ import { requireAdminAccess } from "@/lib/auth-guard";
 
 const patchPlaylistSchema = z.object({
   layoutId: z.string().uuid().nullable().optional(),
+  sidebarProfileId: z.string().uuid().nullable().optional(),
   name: z.string().min(2).max(150).optional(),
   tickerText: z.string().max(1000).nullable().optional(),
   sidebarConfig: z

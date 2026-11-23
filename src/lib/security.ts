@@ -1,7 +1,7 @@
 /**
  * @file src/lib/security.ts
  * @description Cryptographic helpers for generating 6-digit TV pairing PINs,
- * opaque device/feed bearer tokens, and HMAC-SHA256 token hashes.
+ * opaque device/feed bearer tokens, HMAC-SHA256 token hashes, and timing-safe comparisons.
  */
 
 import crypto from "crypto";
@@ -24,11 +24,21 @@ export function generateDeviceToken(): string {
 }
 
 /**
- * Hashes a device token using HMAC-SHA256 before storing in Postgres.
+ * Hashes a device token or feed API key using HMAC-SHA256 before storing in Postgres.
  */
 export function hashDeviceToken(token: string): string {
   return crypto
     .createHmac("sha256", TOKEN_SECRET)
     .update(token)
     .digest("hex");
+}
+
+/**
+ * Constant-time string comparison preventing timing side-channel attacks on hashes & signatures.
+ */
+export function constantTimeEquals(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
 }

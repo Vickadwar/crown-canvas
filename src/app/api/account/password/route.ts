@@ -17,6 +17,11 @@ import {
   createSupabaseAdminClient,
   isSupabaseAdminConfigured,
 } from "@/lib/supabase/admin";
+import {
+  checkRateLimit,
+  getClientIp,
+  rateLimitExceededResponse,
+} from "@/lib/rate-limit";
 import { recordAuditLog } from "@/lib/audit";
 
 const changePasswordSchema = z.object({
@@ -25,6 +30,9 @@ const changePasswordSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const rl = checkRateLimit(`pwd_change:${getClientIp(request)}`, 10, 60_000);
+  if (!rl.allowed) return rateLimitExceededResponse(rl.retryAfterSeconds);
+
   const session = await getSessionAccess();
   if (!session.authenticated || !session.userId || !session.email) {
     return Response.json(

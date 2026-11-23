@@ -22,9 +22,16 @@ import {
   departments,
   schedules,
   emergencyOverrides,
+  showcaseProducts,
+  sidebarProfiles,
 } from "@/db";
 import { hashDeviceToken } from "@/lib/security";
 import { resolveActiveSchedule } from "@/lib/schedule-resolver";
+import { signQrRedirect } from "@/lib/url-security";
+import {
+  CROWN_DECORATIVE_QR_URL,
+  CROWN_PRODUCT_SHOWCASE,
+} from "@/lib/crown-products";
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -287,6 +294,86 @@ export async function GET(request: Request) {
               "If you like it... Crown it!",
             ];
 
+    // Resolve Per-Playlist Sidebar Profile + Curated Showcase Products
+    const [allSidebarProfiles, allShowcaseProducts] = await Promise.all([
+      db
+        .select()
+        .from(sidebarProfiles)
+        .orderBy(desc(sidebarProfiles.isDefault), desc(sidebarProfiles.updatedAt))
+        .catch(() => []),
+      db
+        .select()
+        .from(showcaseProducts)
+        .where(eq(showcaseProducts.isActive, true))
+        .orderBy(asc(showcaseProducts.sortOrder), asc(showcaseProducts.createdAt))
+        .catch(() => []),
+    ]);
+
+    const resolvedSidebarProfile =
+      (targetPlaylist?.sidebarProfileId
+        ? allSidebarProfiles.find((p) => p.id === targetPlaylist.sidebarProfileId)
+        : undefined) ??
+      allSidebarProfiles.find((p) => p.isDefault) ??
+      null;
+
+    const activeCatalog =
+      allShowcaseProducts.length > 0
+        ? allShowcaseProducts.map((p) => ({
+            id: p.id,
+            name: p.name,
+            category: p.badgeHeader,
+            tagline: p.description,
+            imageUrl: p.imageUrl,
+          }))
+        : CROWN_PRODUCT_SHOWCASE;
+
+    let resolvedShowcaseProducts = activeCatalog;
+    if (
+      resolvedSidebarProfile &&
+      Array.isArray(resolvedSidebarProfile.productIds) &&
+      resolvedSidebarProfile.productIds.length > 0
+    ) {
+      const byId = new Map(activeCatalog.map((p) => [p.id, p]));
+      const curated = resolvedSidebarProfile.productIds
+        .map((id) => byId.get(id))
+        .filter((p): p is NonNullable<typeof p> => Boolean(p));
+      if (curated.length > 0) {
+        resolvedShowcaseProducts = curated;
+      }
+    }
+
+    // Generate server-side HMAC signatures for all QR codes (Sidebar + every Studio/QuickPost slide)
+    const qrSignatures: Record<string, string> = {};
+    const sidebarQrTarget =
+      resolvedSidebarProfile?.qrTargetUrl?.trim() ||
+      targetPlaylist?.sidebarConfig?.qrTargetUrl?.trim() ||
+      CROWN_DECORATIVE_QR_URL;
+    qrSignatures[`concierge|${sidebarQrTarget}`] = signQrRedirect(
+      "concierge",
+      sidebarQrTarget
+    );
+
+    for (const item of resolvedItems) {
+      if (item.kind === "quick_post") {
+        const shortCode = item.quickPostId.slice(0, 32);
+        const directQr = item.slideConfig?.qrUrl?.trim();
+        if (directQr) {
+          qrSignatures[`${shortCode}|${directQr}`] = signQrRedirect(
+            shortCode,
+            directQr
+          );
+        }
+        const elements = item.slideConfig?.canvasDoc?.elements ?? [];
+        for (const el of elements) {
+          if (el.type === "qr" && el.qrUrl?.trim()) {
+            const url = el.qrUrl.trim();
+            qrSignatures[`${shortCode}|${url}`] = signQrRedirect(shortCode, url);
+            qrSignatures[`studio|${url}`] = signQrRedirect("studio", url);
+          }
+        }
+      }
+    }
+
     const stablePayload = {
       screenPaused: screen.isActive === false,
       screen: {
@@ -323,8 +410,26 @@ export async function GET(request: Request) {
             version: targetPlaylist.version,
             tickerText: targetPlaylist.tickerText ?? null,
             sidebarConfig: targetPlaylist.sidebarConfig ?? null,
+            sidebarProfileId: targetPlaylist.sidebarProfileId ?? null,
           }
         : null,
+      sidebarProfile: resolvedSidebarProfile
+        ? {
+            id: resolvedSidebarProfile.id,
+            name: resolvedSidebarProfile.name,
+            theme: resolvedSidebarProfile.theme,
+            displayName: resolvedSidebarProfile.displayName,
+            showClock: resolvedSidebarProfile.showClock,
+            showWeather: resolvedSidebarProfile.showWeather,
+            showQr: resolvedSidebarProfile.showQr,
+            qrTitle: resolvedSidebarProfile.qrTitle,
+            promoLabel: resolvedSidebarProfile.promoLabel,
+            qrTargetUrl: resolvedSidebarProfile.qrTargetUrl,
+            slideIntervalSeconds: resolvedSidebarProfile.slideIntervalSeconds,
+          }
+        : null,
+      showcaseProducts: resolvedShowcaseProducts,
+      qrSignatures,
       schedule: matchedSchedule
         ? {
             id: matchedSchedule.id,

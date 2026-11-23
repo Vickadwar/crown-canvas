@@ -48,6 +48,8 @@ export const proofOfPlayLogs = pgTable("proof_of_play_logs", {
 export const qrScanEvents = pgTable("qr_scan_events", {
   id: uuid("id").defaultRandom().primaryKey(),
   shortCode: varchar("short_code", { length: 32 }).notNull(),
+  sourceType: varchar("source_type", { length: 32 }).default("sidebar").notNull(),
+  campaignLabel: varchar("campaign_label", { length: 160 }),
   screenId: uuid("screen_id").references(() => screens.id, {
     onDelete: "set null",
   }),

@@ -23,6 +23,8 @@ import {
   playlists,
   playlistItems,
   studioTemplates,
+  sidebarProfiles,
+  studioBackgrounds,
   schedules,
   emergencyOverrides,
   pairingCodes,
@@ -38,6 +40,7 @@ import {
   requireAdminAccess,
 } from "@/lib/auth-guard";
 import { ensureSystemRoles, getAuthPasswordPolicy } from "@/lib/auth-policy";
+import { ensureShowcaseProducts } from "@/app/api/showcase-products/route";
 import { getSystemRoleName } from "@/lib/permissions";
 import { computeScreenHealth } from "@/lib/screen-health";
 import { getActiveStorageProvider } from "@/lib/storage-provider";
@@ -244,7 +247,7 @@ export async function GET() {
           .select()
           .from(qrScanEvents)
           .orderBy(desc(qrScanEvents.scannedAt))
-          .limit(50),
+          .limit(500),
       ]);
       const b6 = await Promise.all([
         db
@@ -350,9 +353,28 @@ export async function GET() {
       scopedQuickPosts.filter((p) => p.approvalStatus === "pending_approval")
         .length;
 
-    const [roleRows, authPolicy] = await Promise.all([
+    const [
+      roleRows,
+      authPolicy,
+      showcaseProductRows,
+      sidebarProfileRows,
+      studioBackgroundRows,
+    ] = await Promise.all([
       ensureSystemRoles(),
       getAuthPasswordPolicy(),
+      ensureShowcaseProducts(),
+      withDbRetry(() =>
+        db
+          .select()
+          .from(sidebarProfiles)
+          .orderBy(desc(sidebarProfiles.isDefault), desc(sidebarProfiles.updatedAt))
+      ).catch(() => []),
+      withDbRetry(() =>
+        db
+          .select()
+          .from(studioBackgrounds)
+          .orderBy(desc(studioBackgrounds.createdAt))
+      ).catch(() => []),
     ]);
     const roleById = new Map(roleRows.map((r) => [r.id, r]));
 
@@ -364,6 +386,9 @@ export async function GET() {
       supabaseReady,
       storageReady,
       authPolicy,
+      showcaseProducts: showcaseProductRows,
+      sidebarProfiles: sidebarProfileRows,
+      studioBackgrounds: studioBackgroundRows,
       roles: roleRows.map((r) => ({
         ...r,
         memberCount: new Set(

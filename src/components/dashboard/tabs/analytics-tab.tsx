@@ -72,6 +72,145 @@ export function AnalyticsTab({ data, onRefresh }: AnalyticsTabProps) {
     useState<ExecutiveReportPayload | null>(null);
   const [loadingReport, setLoadingReport] = useState(false);
 
+  // Paginated QR Scans Attribution Report state
+  const [qrSearch, setQrSearch] = useState("");
+  const [qrSourceFilter, setQrSourceFilter] = useState<
+    "all" | "sidebar" | "studio_slide" | "quick_post"
+  >("all");
+  const [qrPage, setQrPage] = useState(1);
+  const [qrPageSize, setQrPageSize] = useState(10);
+
+  const screenById = useMemo(
+    () => new Map(data.screens.map((s) => [s.id, s])),
+    [data.screens]
+  );
+  const branchById = useMemo(
+    () => new Map(data.branches.map((b) => [b.id, b])),
+    [data.branches]
+  );
+  const deptById = useMemo(
+    () => new Map(data.departments.map((d) => [d.id, d])),
+    [data.departments]
+  );
+
+  const qrAnalytics = useMemo(() => {
+    const scans = data.telemetry.recentQrScans;
+    const byBranch = new Map<string, number>();
+    const byCampaign = new Map<
+      string,
+      { label: string; source: string; targetUrl: string; scans: number }
+    >();
+    let sidebarScans = 0;
+    let slideScans = 0;
+
+    for (const sc of scans) {
+      const src = sc.sourceType || "sidebar";
+      if (src === "sidebar") sidebarScans += 1;
+      else slideScans += 1;
+
+      const bName = sc.branchId
+        ? branchById.get(sc.branchId)?.name ?? "Unknown Location"
+        : "Unassigned";
+      byBranch.set(bName, (byBranch.get(bName) ?? 0) + 1);
+
+      const label = sc.campaignLabel?.trim() || sc.shortCode || "QR Campaign";
+      const key = `${label}|${sc.targetUrl}`;
+      const existing = byCampaign.get(key) ?? {
+        label,
+        source: src,
+        targetUrl: sc.targetUrl,
+        scans: 0,
+      };
+      existing.scans += 1;
+      byCampaign.set(key, existing);
+    }
+
+    return {
+      total: scans.length,
+      sidebarScans,
+      slideScans,
+      activeLocations: byBranch.size,
+      byBranch: Array.from(byBranch.entries())
+        .map(([location, count]) => ({ location, scans: count }))
+        .sort((a, b) => b.scans - a.scans)
+        .slice(0, 8),
+      topCampaigns: Array.from(byCampaign.values())
+        .sort((a, b) => b.scans - a.scans)
+        .slice(0, 6),
+    };
+  }, [data.telemetry.recentQrScans, branchById]);
+
+  const filteredQrScans = useMemo(() => {
+    const q = qrSearch.trim().toLowerCase();
+    return data.telemetry.recentQrScans.filter((sc) => {
+      const src = sc.sourceType || "sidebar";
+      if (qrSourceFilter !== "all" && src !== qrSourceFilter) return false;
+      if (!q) return true;
+      const bName = sc.branchId
+        ? (branchById.get(sc.branchId)?.name ?? "").toLowerCase()
+        : "";
+      const sName = sc.screenId
+        ? (screenById.get(sc.screenId)?.name ?? "").toLowerCase()
+        : "";
+      return (
+        (sc.campaignLabel ?? "").toLowerCase().includes(q) ||
+        sc.shortCode.toLowerCase().includes(q) ||
+        sc.targetUrl.toLowerCase().includes(q) ||
+        bName.includes(q) ||
+        sName.includes(q)
+      );
+    });
+  }, [data.telemetry.recentQrScans, qrSearch, qrSourceFilter, branchById, screenById]);
+
+  const qrTotalPages = Math.max(1, Math.ceil(filteredQrScans.length / qrPageSize));
+  const safeQrPage = Math.min(qrPage, qrTotalPages);
+  const pagedQrScans = useMemo(() => {
+    const start = (safeQrPage - 1) * qrPageSize;
+    return filteredQrScans.slice(start, start + qrPageSize);
+  }, [filteredQrScans, safeQrPage, qrPageSize]);
+
+  function parseUaOs(ua?: string | null): string {
+    if (!ua) return "Mobile";
+    if (/iphone|ipad|ipod/i.test(ua)) return "iOS";
+    if (/android/i.test(ua)) return "Android";
+    if (/windows|macintosh|linux/i.test(ua)) return "Desktop";
+    return "Mobile";
+  }
+
+  function handleExportQrCsv() {
+    const headers = [
+      "Scan ID",
+      "Source",
+      "Campaign Label",
+      "Location",
+      "Screen",
+      "Target URL",
+      "Device",
+      "Scanned At",
+    ];
+    const rows = filteredQrScans.map((sc) => [
+      sc.id,
+      sc.sourceType || "sidebar",
+      sc.campaignLabel || sc.shortCode,
+      sc.branchId ? branchById.get(sc.branchId)?.name ?? sc.branchId : "Unassigned",
+      sc.screenId ? screenById.get(sc.screenId)?.name ?? sc.screenId : "—",
+      sc.targetUrl,
+      parseUaOs(sc.userAgent),
+      sc.scannedAt,
+    ]);
+    const csv = [headers, ...rows]
+      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `crown-canvas-qr-scans-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${rows.length} QR scan records to CSV`);
+  }
+
   // Paginated Audit Log state
   const [auditSearch, setAuditSearch] = useState("");
   const [auditPage, setAuditPage] = useState(1);
@@ -97,15 +236,6 @@ export function AnalyticsTab({ data, onRefresh }: AnalyticsTabProps) {
     const start = (safeAuditPage - 1) * auditPageSize;
     return filteredAuditLogs.slice(start, start + auditPageSize);
   }, [filteredAuditLogs, safeAuditPage, auditPageSize]);
-
-  const branchById = useMemo(
-    () => new Map(data.branches.map((b) => [b.id, b])),
-    [data.branches]
-  );
-  const deptById = useMemo(
-    () => new Map(data.departments.map((d) => [d.id, d])),
-    [data.departments]
-  );
 
   // 1. Daily Playback Activity Trend (Area Chart)
   const playTrendData = useMemo(() => {
@@ -747,6 +877,304 @@ export function AnalyticsTab({ data, onRefresh }: AnalyticsTabProps) {
           </CardContent>
         </Card>
       )}
+
+      {/* Automated QR Scans Attribution Report (Sidebar + Studio Slides) */}
+      <Card>
+        <CardHeader className="flex flex-col gap-3 pb-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <QrCode className="size-4 text-blue-600" />
+              QR Scans Attribution Report
+            </CardTitle>
+            <CardDescription>
+              Every QR code on Sidebar Showcases and Studio Slides is automatically HMAC-signed and tracked by location, screen, campaign, and device.
+            </CardDescription>
+          </div>
+          <Button size="xs" variant="outline" onClick={handleExportQrCsv}>
+            <Download className="size-3.5" />
+            Export QR CSV
+          </Button>
+        </CardHeader>
+
+        <CardContent className="space-y-5">
+          {/* QR KPI Strip */}
+          <div className="grid gap-3 sm:grid-cols-4">
+            <div className="rounded-xl border border-zinc-200 bg-zinc-50/70 p-3">
+              <p className="text-[11px] font-medium text-zinc-500">Total QR Scans</p>
+              <p className="mt-1 text-2xl font-bold text-zinc-950">
+                {qrAnalytics.total.toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-xl border border-blue-200/70 bg-blue-50/40 p-3">
+              <p className="text-[11px] font-medium text-blue-700">Sidebar QR Scans</p>
+              <p className="mt-1 text-2xl font-bold text-blue-950">
+                {qrAnalytics.sidebarScans.toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-xl border border-violet-200/70 bg-violet-50/40 p-3">
+              <p className="text-[11px] font-medium text-violet-700">Studio / Slide QR Scans</p>
+              <p className="mt-1 text-2xl font-bold text-violet-950">
+                {qrAnalytics.slideScans.toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/40 p-3">
+              <p className="text-[11px] font-medium text-emerald-700">Active Locations</p>
+              <p className="mt-1 text-2xl font-bold text-emerald-950">
+                {qrAnalytics.activeLocations}
+              </p>
+            </div>
+          </div>
+
+          {/* Charts & Top Campaigns */}
+          <div className="grid gap-4 lg:grid-cols-12">
+            <div className="rounded-xl border border-zinc-200 p-4 lg:col-span-7">
+              <p className="mb-3 text-xs font-semibold text-zinc-800">
+                Scans by Location
+              </p>
+              {qrAnalytics.byBranch.length === 0 ? (
+                <div className="flex h-48 items-center justify-center text-xs text-zinc-400">
+                  No QR scans recorded yet. Scan any QR on a paired TV to see live attribution.
+                </div>
+              ) : (
+                <div className="h-48 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={qrAnalytics.byBranch}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
+                      <XAxis
+                        dataKey="location"
+                        tick={{ fontSize: 10, fill: "#71717a" }}
+                      />
+                      <YAxis
+                        allowDecimals={false}
+                        tick={{ fontSize: 10, fill: "#71717a" }}
+                      />
+                      <Tooltip />
+                      <Bar dataKey="scans" fill="#2563eb" radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-zinc-200 p-4 lg:col-span-5">
+              <p className="mb-3 text-xs font-semibold text-zinc-800">
+                Top Scanned QR Campaigns
+              </p>
+              {qrAnalytics.topCampaigns.length === 0 ? (
+                <div className="flex h-48 items-center justify-center text-xs text-zinc-400">
+                  Campaign rankings will appear after customer scans.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {qrAnalytics.topCampaigns.map((c) => (
+                    <div
+                      key={`${c.label}-${c.targetUrl}`}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50/70 px-3 py-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-zinc-900">
+                          {c.label}
+                        </p>
+                        <p className="truncate text-[10px] text-zinc-400">
+                          {c.targetUrl}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <Badge
+                          variant={c.source === "sidebar" ? "info" : "purple"}
+                          className="text-[10px]"
+                        >
+                          {c.source === "sidebar" ? "Sidebar" : "Slide"}
+                        </Badge>
+                        <span className="font-mono font-bold text-zinc-900">
+                          {c.scans}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Filterable & Paginated QR Scans Table */}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative w-60">
+                  <Search className="pointer-events-none absolute left-2.5 top-2.5 size-3.5 text-zinc-400" />
+                  <Input
+                    className="h-8 pl-8 text-xs"
+                    placeholder="Filter location, screen, campaign..."
+                    value={qrSearch}
+                    onChange={(e) => {
+                      setQrSearch(e.target.value);
+                      setQrPage(1);
+                    }}
+                  />
+                </div>
+                <div className="flex gap-1">
+                  {(
+                    [
+                      { id: "all", label: "All Sources" },
+                      { id: "sidebar", label: "Sidebar" },
+                      { id: "studio_slide", label: "Studio Slides" },
+                      { id: "quick_post", label: "Quick Posts" },
+                    ] as const
+                  ).map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => {
+                        setQrSourceFilter(f.id);
+                        setQrPage(1);
+                      }}
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+                        qrSourceFilter === f.id
+                          ? "bg-zinc-950 text-white"
+                          : "border border-zinc-200 bg-white text-zinc-600 hover:text-zinc-950"
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="w-28">
+                <ModernSelect
+                  size="sm"
+                  value={String(qrPageSize)}
+                  onValueChange={(v) => {
+                    setQrPageSize(Number(v) || 10);
+                    setQrPage(1);
+                  }}
+                  options={[
+                    { value: "10", label: "10 / page" },
+                    { value: "25", label: "25 / page" },
+                    { value: "50", label: "50 / page" },
+                  ]}
+                />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border border-zinc-200">
+              <table className="w-full text-left text-xs">
+                <thead className="border-b border-zinc-200 bg-zinc-50/80 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                  <tr>
+                    <th className="px-3.5 py-2">Source</th>
+                    <th className="px-3.5 py-2">Campaign</th>
+                    <th className="px-3.5 py-2">Location / Screen</th>
+                    <th className="px-3.5 py-2">Destination</th>
+                    <th className="px-3.5 py-2">Device</th>
+                    <th className="px-3.5 py-2 text-right">Scanned At</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-100">
+                  {pagedQrScans.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="px-4 py-8 text-center text-zinc-500"
+                      >
+                        No QR scan events found.
+                      </td>
+                    </tr>
+                  ) : (
+                    pagedQrScans.map((sc) => (
+                      <tr key={sc.id} className="hover:bg-zinc-50/60">
+                        <td className="px-3.5 py-2.5">
+                          <Badge
+                            variant={
+                              (sc.sourceType || "sidebar") === "sidebar"
+                                ? "info"
+                                : "purple"
+                            }
+                            className="text-[10px]"
+                          >
+                            {(sc.sourceType || "sidebar") === "sidebar"
+                              ? "Sidebar"
+                              : sc.sourceType === "quick_post"
+                                ? "Quick Slide"
+                                : "Studio Slide"}
+                          </Badge>
+                        </td>
+                        <td className="max-w-[180px] truncate px-3.5 py-2.5 font-medium text-zinc-900">
+                          {sc.campaignLabel || sc.shortCode}
+                        </td>
+                        <td className="px-3.5 py-2.5 text-zinc-600">
+                          <span className="font-medium text-zinc-800">
+                            {sc.branchId
+                              ? branchById.get(sc.branchId)?.name ?? "Location"
+                              : "Unassigned"}
+                          </span>
+                          {sc.screenId && screenById.get(sc.screenId) && (
+                            <span className="block text-[10px] text-zinc-400">
+                              {screenById.get(sc.screenId)?.name}
+                            </span>
+                          )}
+                        </td>
+                        <td className="max-w-[220px] truncate px-3.5 py-2.5 font-mono text-[11px] text-zinc-500">
+                          {sc.targetUrl}
+                        </td>
+                        <td className="px-3.5 py-2.5">
+                          <Badge variant="outline" className="text-[10px]">
+                            {parseUaOs(sc.userAgent)}
+                          </Badge>
+                        </td>
+                        <td className="whitespace-nowrap px-3.5 py-2.5 text-right text-[11px] text-zinc-400">
+                          {new Date(sc.scannedAt).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {filteredQrScans.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
+                <span>
+                  Showing{" "}
+                  <strong className="text-zinc-900">
+                    {(safeQrPage - 1) * qrPageSize + 1}–
+                    {Math.min(safeQrPage * qrPageSize, filteredQrScans.length)}
+                  </strong>{" "}
+                  of{" "}
+                  <strong className="text-zinc-900">
+                    {filteredQrScans.length}
+                  </strong>{" "}
+                  QR scans
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={safeQrPage <= 1}
+                    onClick={() => setQrPage((p) => Math.max(1, p - 1))}
+                  >
+                    <ChevronLeft className="size-3.5" />
+                    Prev
+                  </Button>
+                  <span className="px-2 font-mono text-[11px] text-zinc-700">
+                    Page {safeQrPage} / {qrTotalPages}
+                  </span>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={safeQrPage >= qrTotalPages}
+                    onClick={() =>
+                      setQrPage((p) => Math.min(qrTotalPages, p + 1))
+                    }
+                  >
+                    Next
+                    <ChevronRight className="size-3.5" />
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Paginated Audit Trail Table */}
       <Card>

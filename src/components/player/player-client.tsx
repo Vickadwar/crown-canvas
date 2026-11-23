@@ -31,7 +31,10 @@ import type {
   QuickPostSlideConfig,
 } from "@/db/schema";
 import { DEMO_QUICK_POSTS } from "@/lib/demo-data";
-import { CROWN_OFFICIAL_LOGO_URL } from "@/lib/crown-products";
+import {
+  CROWN_OFFICIAL_LOGO_URL,
+  type CrownProductItem,
+} from "@/lib/crown-products";
 import {
   clearPlayerMediaCache,
   resolveAssetPlaybackUrl,
@@ -43,7 +46,11 @@ import {
   createSupabaseBrowserClient,
   isSupabaseConfigured,
 } from "@/lib/supabase/client";
-import { MultiZoneFrame } from "./multi-zone-frame";
+import {
+  MultiZoneFrame,
+  type ActiveSidebarProfile,
+} from "./multi-zone-frame";
+import { PdfSignageViewer } from "./pdf-signage-viewer";
 import { QuickPostSlide } from "./quick-post-slide";
 import { TickerBar } from "./ticker-bar";
 
@@ -103,7 +110,11 @@ interface PlayerManifest {
     version: number;
     tickerText?: string | null;
     sidebarConfig?: PlaylistSidebarConfig | null;
+    sidebarProfileId?: string | null;
   } | null;
+  sidebarProfile?: ActiveSidebarProfile | null;
+  showcaseProducts?: CrownProductItem[];
+  qrSignatures?: Record<string, string>;
   layout?: {
     id: string;
     name: string;
@@ -194,6 +205,7 @@ export function PlayerClient() {
   const [storageChecked, setStorageChecked] = useState(false);
   const [deviceToken, setDeviceToken] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [refreshingPin, setRefreshingPin] = useState(false);
   const [pairingConfigured, setPairingConfigured] = useState(true);
   const [hardwareType, setHardwareType] = useState<"android_tv" | "mini_pc">("android_tv");
   const [demoMode, setDemoMode] = useState(false);
@@ -318,6 +330,38 @@ export function PlayerClient() {
       window.removeEventListener("offline", onOffline);
       wakeLock?.release().catch(() => { });
     };
+  }, []);
+
+  // In-place pairing PIN refresh (regenerates ONLY the 6-digit code without reloading the page/logo)
+  const handleRefreshPairingCode = useCallback(async () => {
+    setRefreshingPin(true);
+    try {
+      localStorage.removeItem(STORAGE_PENDING_PIN_KEY);
+      const detected = detectHardwareType();
+      const res = await fetch("/api/player/pair/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hardwareType: detected,
+          resolution: `${window.screen.width}x${window.screen.height}`,
+        }),
+      });
+      const data = await res.json();
+      setPairingConfigured(data.configured !== false);
+      if (data.code) {
+        setPairingCode(data.code);
+        if (data.configured !== false && data.expiresAt) {
+          localStorage.setItem(
+            STORAGE_PENDING_PIN_KEY,
+            JSON.stringify({ code: data.code, expiresAt: data.expiresAt })
+          );
+        }
+      }
+    } catch {
+      setPairingCode("OFFLINE");
+    } finally {
+      setRefreshingPin(false);
+    }
   }, []);
 
   // 2. Request or resume 6-digit pairing PIN only after localStorage is checked
@@ -1188,7 +1232,11 @@ export function PlayerClient() {
             to link this display.
           </p>
 
-          <div className="mt-8 flex items-center justify-center gap-2.5 md:gap-3.5">
+          <div
+            className={`mt-8 flex items-center justify-center gap-2.5 transition-opacity duration-200 md:gap-3.5 ${
+              refreshingPin ? "opacity-45" : "opacity-100"
+            }`}
+          >
             {codeChars.map((ch, idx) => (
               <div
                 key={`${idx}-${ch}`}
@@ -1209,11 +1257,14 @@ export function PlayerClient() {
           <div className="mt-8 flex items-center justify-center">
             <button
               type="button"
-              onClick={() => window.location.reload()}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-zinc-200 bg-white px-5 text-xs font-semibold text-zinc-800 shadow-2xs transition hover:border-zinc-300 hover:bg-zinc-50"
+              disabled={refreshingPin}
+              onClick={() => void handleRefreshPairingCode()}
+              className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-zinc-200 bg-white px-5 text-xs font-semibold text-zinc-800 shadow-2xs transition hover:border-zinc-300 hover:bg-zinc-50 disabled:opacity-60"
             >
-              <RefreshCw className="size-3.5" />
-              Refresh Pairing Code
+              <RefreshCw
+                className={`size-3.5 ${refreshingPin ? "animate-spin" : ""}`}
+              />
+              {refreshingPin ? "Generating New Code..." : "Refresh Pairing Code"}
             </button>
           </div>
         </main>
@@ -1401,6 +1452,7 @@ export function PlayerClient() {
       screenId={!demoMode ? manifest?.screen?.id : undefined}
       branchId={!demoMode ? manifest?.branch?.id : undefined}
       quickPostId={!demoMode ? currentItem.quickPostId : undefined}
+      qrSignatures={!demoMode ? manifest?.qrSignatures : undefined}
     />
   ) : currentItem.mediaType === "video" ? (
     <video
@@ -1425,7 +1477,14 @@ export function PlayerClient() {
         setCurrentIndex((prev) => (prev + 1) % Math.max(1, activeItems.length))
       }
     />
-  ) : currentItem.mediaType === "web_url" || currentItem.mediaType === "pdf" ? (
+  ) : currentItem.mediaType === "pdf" ? (
+    <PdfSignageViewer
+      key={`${currentItem.id}-${safeIndex}`}
+      url={currentPlaybackUrl || currentItem.publicUrl}
+      title={currentItem.title}
+      durationSeconds={currentItem.durationSeconds}
+    />
+  ) : currentItem.mediaType === "web_url" ? (
     <iframe
       key={`${currentItem.id}-${safeIndex}`}
       src={currentItem.publicUrl}
@@ -1475,6 +1534,9 @@ export function PlayerClient() {
           clockText={clockText}
           orientation={manifest?.screen?.orientation ?? "landscape"}
           sidebarConfig={manifest?.playlist?.sidebarConfig ?? null}
+          sidebarProfile={manifest?.sidebarProfile ?? null}
+          showcaseProducts={manifest?.showcaseProducts}
+          qrSignatures={manifest?.qrSignatures}
           screenId={!demoMode ? manifest?.screen?.id : undefined}
           branchId={!demoMode ? manifest?.branch?.id : undefined}
           tickerMessages={

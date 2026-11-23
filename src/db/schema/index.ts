@@ -19,7 +19,14 @@ import { departments } from "./departments";
 import { users, userScopes, roles } from "./auth";
 import { screenGroups, screens, screenCommands, pairingCodes } from "./screens";
 import { mediaAssets, mediaFolders } from "./assets";
-import { layouts, dataFeeds, quickPosts, playlists, playlistItems } from "./studio";
+import {
+  layouts,
+  dataFeeds,
+  quickPosts,
+  playlists,
+  playlistItems,
+  sidebarProfiles,
+} from "./studio";
 import { schedules, emergencyOverrides } from "./schedules";
 import { proofOfPlayLogs, qrScanEvents } from "./analytics";
 
@@ -160,6 +167,10 @@ export const playlistsRelations = relations(playlists, ({ one, many }) => ({
   layout: one(layouts, {
     fields: [playlists.layoutId],
     references: [layouts.id],
+  }),
+  sidebarProfile: one(sidebarProfiles, {
+    fields: [playlists.sidebarProfileId],
+    references: [sidebarProfiles.id],
   }),
   items: many(playlistItems),
   schedules: many(schedules),

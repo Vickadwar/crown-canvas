@@ -266,6 +266,55 @@ export const quickPosts = pgTable("quick_posts", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+export type SidebarThemeKey =
+  | "white_minimal"
+  | "warm_editorial"
+  | "navy_dark"
+  | "slate_industrial";
+
+export const showcaseProducts = pgTable("showcase_products", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: varchar("name", { length: 140 }).notNull(),
+  badgeHeader: varchar("badge_header", { length: 80 })
+    .default("FEATURED PRODUCT")
+    .notNull(),
+  description: text("description").default("").notNull(),
+  imageUrl: text("image_url").notNull(),
+  storagePath: text("storage_path"),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const sidebarProfiles = pgTable("sidebar_profiles", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: varchar("name", { length: 140 }).notNull(),
+  description: text("description"),
+  theme: varchar("theme", { length: 32 }).default("white_minimal").notNull(),
+  displayName: varchar("display_name", { length: 140 }),
+  showClock: boolean("show_clock").default(true).notNull(),
+  showWeather: boolean("show_weather").default(true).notNull(),
+  showQr: boolean("show_qr").default(true).notNull(),
+  qrTitle: varchar("qr_title", { length: 100 }).default("Explore Decorative Range"),
+  promoLabel: varchar("promo_label", { length: 200 }),
+  qrTargetUrl: text("qr_target_url"),
+  slideIntervalSeconds: integer("slide_interval_seconds").default(6).notNull(),
+  productIds: jsonb("product_ids").$type<string[]>().default([]).notNull(),
+  isDefault: boolean("is_default").default(false).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const studioBackgrounds = pgTable("studio_backgrounds", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: varchar("name", { length: 140 }).notNull(),
+  category: varchar("category", { length: 64 }).default("Campaign").notNull(),
+  imageUrl: text("image_url").notNull(),
+  storagePath: text("storage_path"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const playlists = pgTable("playlists", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: varchar("name", { length: 150 }).notNull(),
@@ -281,6 +330,9 @@ export const playlists = pgTable("playlists", {
   }),
   tickerText: text("ticker_text"),
   sidebarConfig: jsonb("sidebar_config").$type<PlaylistSidebarConfig>(),
+  sidebarProfileId: uuid("sidebar_profile_id").references(() => sidebarProfiles.id, {
+    onDelete: "set null",
+  }),
   defaultDurationSeconds: integer("default_duration_seconds").default(15).notNull(),
   isActive: boolean("is_active").default(true).notNull(),
   version: integer("version").default(1).notNull(),
