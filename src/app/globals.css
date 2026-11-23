@@ -172,6 +172,8 @@
 .animate-crown-ticker {
   display: inline-flex;
   white-space: nowrap;
+  will-change: transform;
+  backface-visibility: hidden;
   animation: crown-ticker 32s linear infinite;
 }
 
@@ -201,9 +203,30 @@
 }
 
 .animate-crown-product-hero {
+  will-change: transform, opacity;
+  backface-visibility: hidden;
   animation:
     crown-product-stage 0.72s cubic-bezier(0.16, 1, 0.3, 1) both,
     crown-product-float 4.2s ease-in-out 0.72s infinite;
+}
+
+/* Hide idle mouse / Smart TV pointer on /player */
+.player-cursor-hidden,
+.player-cursor-hidden * {
+  cursor: none !important;
+}
+
+/* High-contrast hex fallbacks for older Smart TV browsers without CSS oklch() support */
+@supports not (color: oklch(0 0 0)) {
+  .dark {
+    --background: #09090b;
+    --foreground: #fafafa;
+    --card: #18181b;
+    --card-foreground: #fafafa;
+    --border: #27272a;
+    --muted: #27272a;
+    --muted-foreground: #a1a1aa;
+  }
 }
 
 .studio-dot-grid {

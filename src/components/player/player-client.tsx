@@ -41,6 +41,22 @@ import {
   syncMediaAssetsToDisk,
   type SyncProgress,
 } from "@/lib/player/cache-engine";
+import {
+  addFullscreenChangeListener,
+  createTimeoutSignal,
+  detectTvDeviceProfile,
+  exitElementFullscreen,
+  getFullscreenElement,
+  mapRemoteKeyToAction,
+  requestElementFullscreen,
+  safeLocalGet,
+  safeLocalRemove,
+  safeLocalSet,
+  safeSessionGet,
+  safeSessionSet,
+  shouldUseVideoCrossOrigin,
+  type TvDeviceProfile,
+} from "@/lib/player/tv-browser-compat";
 import { isWithinOperatingHours } from "@/lib/screen-health";
 import {
   createSupabaseBrowserClient,
@@ -148,13 +164,13 @@ const STORAGE_MUTED_KEY = "crown_canvas_player_muted";
 const SESSION_EXECUTED_CMDS_KEY = "crown_canvas_executed_cmds";
 
 function claimCommandOnce(commandId?: string | null): boolean {
-  if (!commandId || typeof sessionStorage === "undefined") return true;
+  if (!commandId) return true;
   try {
-    const raw = sessionStorage.getItem(SESSION_EXECUTED_CMDS_KEY);
+    const raw = safeSessionGet(SESSION_EXECUTED_CMDS_KEY);
     const seen = raw ? (JSON.parse(raw) as string[]) : [];
     if (seen.includes(commandId)) return false;
     seen.push(commandId);
-    sessionStorage.setItem(
+    safeSessionSet(
       SESSION_EXECUTED_CMDS_KEY,
       JSON.stringify(seen.slice(-50))
     );
@@ -179,14 +195,14 @@ const DEMO_PLAYER_ITEMS: PlayerItem[] = DEMO_QUICK_POSTS.map((qp) => ({
   accentColor: qp.accentColor,
 }));
 
-function detectHardwareType(): "android_tv" | "mini_pc" {
-  if (typeof navigator === "undefined") return "android_tv";
-  const ua = navigator.userAgent.toLowerCase();
-  if (ua.includes("android") || ua.includes("aft") || ua.includes("bravia")) {
-    return "android_tv";
-  }
-  return "mini_pc";
-}
+const DEFAULT_TV_PROFILE: TvDeviceProfile = {
+  platform: "android_tv",
+  label: "Smart TV",
+  apiHardwareType: "android_tv",
+  isTvBrowser: true,
+  singleVideoDecoder: true,
+  maxCacheBytes: 512 * 1024 * 1024,
+};
 
 function formatEastAfricaClock(timezone?: string): string {
   try {
@@ -207,7 +223,7 @@ export function PlayerClient() {
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [refreshingPin, setRefreshingPin] = useState(false);
   const [pairingConfigured, setPairingConfigured] = useState(true);
-  const [hardwareType, setHardwareType] = useState<"android_tv" | "mini_pc">("android_tv");
+  const [tvProfile, setTvProfile] = useState<TvDeviceProfile>(DEFAULT_TV_PROFILE);
   const [demoMode, setDemoMode] = useState(false);
   const [demoSplitView, setDemoSplitView] = useState(true);
 
@@ -228,6 +244,11 @@ export function PlayerClient() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [standbyBypass, setStandbyBypass] = useState(false);
   const [isStandby, setIsStandby] = useState(false);
+  const [cursorHidden, setCursorHidden] = useState(false);
+  const [remoteHudVisible, setRemoteHudVisible] = useState(false);
+  const [showRemoteHint, setShowRemoteHint] = useState(false);
+  const [corsFallbackKey, setCorsFallbackKey] = useState<string | null>(null);
+  const [videoManualPaused, setVideoManualPaused] = useState(false);
 
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const blobUrlsRef = useRef<Map<string, string>>(new Map());
@@ -236,7 +257,8 @@ export function PlayerClient() {
   const manifestEtagRef = useRef<string | null>(null);
   const currentItemTitleRef = useRef<string | null>(null);
   const activeVideoRef = useRef<HTMLVideoElement | null>(null);
-  const hardwareTypeRef = useRef<"android_tv" | "mini_pc">("android_tv");
+  const tvProfileRef = useRef<TvDeviceProfile>(DEFAULT_TV_PROFILE);
+  const remoteHudTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const branchHoursRef = useRef<{
     openingTime?: string;
     closingTime?: string;
@@ -263,14 +285,14 @@ export function PlayerClient() {
     }
 
     const initTimer = setTimeout(() => {
-      const detected = detectHardwareType();
-      hardwareTypeRef.current = detected;
-      setHardwareType(detected);
-      const savedToken = localStorage.getItem(STORAGE_TOKEN_KEY);
+      const detected = detectTvDeviceProfile();
+      tvProfileRef.current = detected;
+      setTvProfile(detected);
+      const savedToken = safeLocalGet(STORAGE_TOKEN_KEY);
       if (savedToken) {
         setDeviceToken(savedToken);
       }
-      const cachedManifestRaw = localStorage.getItem(STORAGE_MANIFEST_KEY);
+      const cachedManifestRaw = safeLocalGet(STORAGE_MANIFEST_KEY);
       if (cachedManifestRaw) {
         try {
           setManifest(JSON.parse(cachedManifestRaw) as PlayerManifest);
@@ -278,14 +300,21 @@ export function PlayerClient() {
           // Ignore corrupt cache
         }
       }
-      const savedMuted = localStorage.getItem(STORAGE_MUTED_KEY);
+      const savedMuted = safeLocalGet(STORAGE_MUTED_KEY);
       if (savedMuted === "true") {
         setIsMuted(true);
       }
       setIsOnline(navigator.onLine);
       setClockText(formatEastAfricaClock(timezoneRef.current));
       setStorageChecked(true);
+      if (detected.isTvBrowser && !getFullscreenElement()) {
+        setShowRemoteHint(true);
+      }
     }, 0);
+
+    const hintHideTimer = setTimeout(() => {
+      setShowRemoteHint(false);
+    }, 7000);
 
     const clockInterval = setInterval(() => {
       setClockText(formatEastAfricaClock(timezoneRef.current));
@@ -308,7 +337,8 @@ export function PlayerClient() {
     window.addEventListener("offline", onOffline);
 
     let wakeLock: { release: () => Promise<void> } | null = null;
-    if ("wakeLock" in navigator) {
+    const requestWakeLock = () => {
+      if (!("wakeLock" in navigator)) return;
       (
         navigator as unknown as {
           wakeLock: {
@@ -321,14 +351,47 @@ export function PlayerClient() {
           wakeLock = wl;
         })
         .catch(() => { });
-    }
+    };
+    requestWakeLock();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
       clearTimeout(initTimer);
+      clearTimeout(hintHideTimer);
       clearInterval(clockInterval);
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       wakeLock?.release().catch(() => { });
+    };
+  }, []);
+
+  // Auto-hide mouse/remote pointer cursor after 4s of inactivity so signage stays clean
+  useEffect(() => {
+    let idleTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      setCursorHidden(true);
+    }, 4000);
+
+    const resetCursor = () => {
+      setCursorHidden(false);
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        setCursorHidden(true);
+      }, 4000);
+    };
+
+    window.addEventListener("pointermove", resetCursor, { passive: true });
+    window.addEventListener("pointerdown", resetCursor, { passive: true });
+    return () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      window.removeEventListener("pointermove", resetCursor);
+      window.removeEventListener("pointerdown", resetCursor);
     };
   }, []);
 
@@ -336,13 +399,13 @@ export function PlayerClient() {
   const handleRefreshPairingCode = useCallback(async () => {
     setRefreshingPin(true);
     try {
-      localStorage.removeItem(STORAGE_PENDING_PIN_KEY);
-      const detected = detectHardwareType();
+      safeLocalRemove(STORAGE_PENDING_PIN_KEY);
+      const detected = detectTvDeviceProfile();
       const res = await fetch("/api/player/pair/request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          hardwareType: detected,
+          hardwareType: detected.apiHardwareType,
           resolution: `${window.screen.width}x${window.screen.height}`,
         }),
       });
@@ -351,7 +414,7 @@ export function PlayerClient() {
       if (data.code) {
         setPairingCode(data.code);
         if (data.configured !== false && data.expiresAt) {
-          localStorage.setItem(
+          safeLocalSet(
             STORAGE_PENDING_PIN_KEY,
             JSON.stringify({ code: data.code, expiresAt: data.expiresAt })
           );
@@ -372,7 +435,7 @@ export function PlayerClient() {
     async function ensurePairingPin() {
       // Reuse valid unclaimed PIN across browser refreshes
       try {
-        const pendingRaw = localStorage.getItem(STORAGE_PENDING_PIN_KEY);
+        const pendingRaw = safeLocalGet(STORAGE_PENDING_PIN_KEY);
         if (pendingRaw) {
           const pending = JSON.parse(pendingRaw) as {
             code?: string;
@@ -387,8 +450,8 @@ export function PlayerClient() {
               const statusJson = await statusRes.json();
               if (!active) return;
               if (statusJson.paired && statusJson.deviceToken) {
-                localStorage.setItem(STORAGE_TOKEN_KEY, statusJson.deviceToken);
-                localStorage.removeItem(STORAGE_PENDING_PIN_KEY);
+                safeLocalSet(STORAGE_TOKEN_KEY, statusJson.deviceToken);
+                safeLocalRemove(STORAGE_PENDING_PIN_KEY);
                 setDeviceToken(statusJson.deviceToken);
                 return;
               }
@@ -399,19 +462,19 @@ export function PlayerClient() {
               }
             }
           }
-          localStorage.removeItem(STORAGE_PENDING_PIN_KEY);
+          safeLocalRemove(STORAGE_PENDING_PIN_KEY);
         }
       } catch {
         // Fall through to requesting a fresh PIN
       }
 
-      const detected = detectHardwareType();
+      const detected = detectTvDeviceProfile();
       try {
         const res = await fetch("/api/player/pair/request", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            hardwareType: detected,
+            hardwareType: detected.apiHardwareType,
             resolution: `${window.screen.width}x${window.screen.height}`,
           }),
         });
@@ -420,7 +483,7 @@ export function PlayerClient() {
         setPairingConfigured(data.configured !== false);
         setPairingCode(data.code);
         if (data.configured !== false && data.code && data.expiresAt) {
-          localStorage.setItem(
+          safeLocalSet(
             STORAGE_PENDING_PIN_KEY,
             JSON.stringify({ code: data.code, expiresAt: data.expiresAt })
           );
@@ -447,11 +510,11 @@ export function PlayerClient() {
         );
         const data = await res.json();
         if (data.paired && data.deviceToken) {
-          localStorage.setItem(STORAGE_TOKEN_KEY, data.deviceToken);
-          localStorage.removeItem(STORAGE_PENDING_PIN_KEY);
+          safeLocalSet(STORAGE_TOKEN_KEY, data.deviceToken);
+          safeLocalRemove(STORAGE_PENDING_PIN_KEY);
           setDeviceToken(data.deviceToken);
         } else if (data.expired) {
-          localStorage.removeItem(STORAGE_PENDING_PIN_KEY);
+          safeLocalRemove(STORAGE_PENDING_PIN_KEY);
           setPairingCode(null);
         }
       } catch {
@@ -463,9 +526,9 @@ export function PlayerClient() {
   }, [deviceToken, demoMode, pairingCode, pairingConfigured]);
 
   const resetLocalPairing = useCallback(() => {
-    localStorage.removeItem(STORAGE_TOKEN_KEY);
-    localStorage.removeItem(STORAGE_MANIFEST_KEY);
-    localStorage.removeItem(STORAGE_PENDING_PIN_KEY);
+    safeLocalRemove(STORAGE_TOKEN_KEY);
+    safeLocalRemove(STORAGE_MANIFEST_KEY);
+    safeLocalRemove(STORAGE_PENDING_PIN_KEY);
     manifestEtagRef.current = null;
     setDeviceToken(null);
     setManifest(null);
@@ -580,7 +643,7 @@ export function PlayerClient() {
 
         const data = (await res.json()) as PlayerManifest;
         setManifest(data);
-        localStorage.setItem(STORAGE_MANIFEST_KEY, JSON.stringify(data));
+        safeLocalSet(STORAGE_MANIFEST_KEY, JSON.stringify(data));
 
         if (data.branch?.openingTime && data.branch?.closingTime) {
           const openNow = isWithinOperatingHours(
@@ -606,8 +669,9 @@ export function PlayerClient() {
 
         await syncMediaAssetsToDisk(
           mediaRefs,
-          hardwareTypeRef.current,
-          setSyncProgress
+          tvProfileRef.current.apiHardwareType,
+          setSyncProgress,
+          tvProfileRef.current.maxCacheBytes
         );
       } catch {
         // Offline: continue using previously cached manifest & local disk Cache Storage
@@ -665,6 +729,7 @@ export function PlayerClient() {
 
             const ackImmediately = async () => {
               if (!cmdId) return;
+              const timeout = createTimeoutSignal(1500);
               try {
                 await fetch("/api/player/heartbeat", {
                   method: "POST",
@@ -675,10 +740,12 @@ export function PlayerClient() {
                   body: JSON.stringify({
                     executedCommandIds: [cmdId],
                   }),
-                  signal: AbortSignal.timeout(1500),
+                  signal: timeout.signal,
                 });
               } catch {
                 // Non-fatal
+              } finally {
+                timeout.cleanup();
               }
             };
 
@@ -799,7 +866,7 @@ export function PlayerClient() {
     if (!deviceToken) return;
 
     const flushTelemetry = async () => {
-      const raw = localStorage.getItem("crown_canvas_telemetry_queue");
+      const raw = safeLocalGet("crown_canvas_telemetry_queue");
       if (!raw) return;
       try {
         const queued = JSON.parse(raw) as Array<{
@@ -823,7 +890,7 @@ export function PlayerClient() {
         });
         if (res.ok || res.status === 400) {
           const remaining = queued.slice(batch.length);
-          localStorage.setItem(
+          safeLocalSet(
             "crown_canvas_telemetry_queue",
             JSON.stringify(remaining)
           );
@@ -969,11 +1036,7 @@ export function PlayerClient() {
     if (audioBlocked) {
       setAudioBlocked(false);
       setIsMuted(false);
-      try {
-        localStorage.setItem(STORAGE_MUTED_KEY, "false");
-      } catch {
-        // Ignore storage errors
-      }
+      safeLocalSet(STORAGE_MUTED_KEY, "false");
       const video = activeVideoRef.current;
       if (video) {
         video.muted = false;
@@ -985,11 +1048,7 @@ export function PlayerClient() {
 
     setIsMuted((prev) => {
       const next = !prev;
-      try {
-        localStorage.setItem(STORAGE_MUTED_KEY, String(next));
-      } catch {
-        // Ignore storage errors
-      }
+      safeLocalSet(STORAGE_MUTED_KEY, String(next));
       const video = activeVideoRef.current;
       if (video) {
         video.muted = next;
@@ -1005,32 +1064,45 @@ export function PlayerClient() {
   const toggleFullscreen = useCallback(() => {
     const container = playerContainerRef.current;
     if (!container) return;
-    if (document.fullscreenElement) {
-      void document.exitFullscreen().catch(() => { });
+    setShowRemoteHint(false);
+    if (getFullscreenElement()) {
+      void exitElementFullscreen();
     } else {
-      void container.requestFullscreen().catch(() => { });
+      void requestElementFullscreen(container);
     }
   }, []);
 
+  const revealRemoteHud = useCallback(() => {
+    setRemoteHudVisible(true);
+    if (remoteHudTimerRef.current) clearTimeout(remoteHudTimerRef.current);
+    remoteHudTimerRef.current = setTimeout(() => {
+      setRemoteHudVisible(false);
+    }, 8000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (remoteHudTimerRef.current) clearTimeout(remoteHudTimerRef.current);
+    };
+  }, []);
+
   // Keep fullscreen locked to the outer player container (never a child <video>)
-  // so Split-Screen sidebar stays visible and fullscreen never drops between slides.
+  // across standard & vendor-prefixed Smart TV engines (Samsung Tizen, LG webOS, WebKit).
   useEffect(() => {
     const onFullscreenChange = () => {
-      const fsEl = document.fullscreenElement;
+      const fsEl = getFullscreenElement();
       const container = playerContainerRef.current;
       if (fsEl && container && fsEl !== container && container.contains(fsEl)) {
         // Browser put a child <video> into fullscreen; promote to whole player container
-        void document
-          .exitFullscreen()
-          .then(() => container.requestFullscreen())
-          .catch(() => { });
+        void exitElementFullscreen().then(() =>
+          requestElementFullscreen(container)
+        );
         return;
       }
       setIsFullscreen(Boolean(fsEl));
+      if (fsEl) setShowRemoteHint(false);
     };
-    document.addEventListener("fullscreenchange", onFullscreenChange);
-    return () =>
-      document.removeEventListener("fullscreenchange", onFullscreenChange);
+    return addFullscreenChangeListener(onFullscreenChange);
   }, []);
 
   // Smart unmuted autoplay (ignores transient AbortError on source swap; silently recovers
@@ -1077,7 +1149,69 @@ export function PlayerClient() {
     return () => {
       cancelled = true;
     };
-  }, [currentItem, safeIndex, currentPlaybackUrl, isMuted]);
+  }, [currentItem, safeIndex, currentPlaybackUrl, isMuted, corsFallbackKey]);
+
+  // Self-Healing Video Stall Watchdog: recovers or skips frozen clips on flaky Smart TV Wi-Fi
+  useEffect(() => {
+    if (
+      videoManualPaused ||
+      currentItem?.kind !== "media_asset" ||
+      currentItem.mediaType !== "video"
+    ) {
+      return;
+    }
+
+    let lastTime = -1;
+    let stuckSeconds = 0;
+    let nudged = false;
+
+    const timer = setInterval(() => {
+      const video = activeVideoRef.current;
+      if (!video || videoManualPaused) return;
+
+      const cur = video.currentTime;
+      if (cur > lastTime + 0.05) {
+        lastTime = cur;
+        stuckSeconds = 0;
+        nudged = false;
+        return;
+      }
+
+      stuckSeconds += 5;
+
+      // After 15s of no frame progress, try a gentle resume nudge
+      if (stuckSeconds >= 15 && !nudged) {
+        nudged = true;
+        try {
+          if (video.readyState >= 2 && Number.isFinite(video.duration) && cur + 0.25 < video.duration) {
+            video.currentTime = cur + 0.15;
+          }
+          void video.play().catch(() => { });
+        } catch {
+          // Proceed to skip if still stuck
+        }
+        return;
+      }
+
+      // After 25s total stall, advance cleanly so the showroom TV never freezes
+      if (stuckSeconds >= 25) {
+        stuckSeconds = 0;
+        nudged = false;
+        if (activeItems.length > 1) {
+          setCurrentIndex((prev) => (prev + 1) % activeItems.length);
+        } else {
+          try {
+            video.currentTime = 0;
+            void video.play().catch(() => { });
+          } catch {
+            // Ignore single-clip recovery error
+          }
+        }
+      }
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [currentItem, safeIndex, activeItems.length, videoManualPaused]);
 
   // Automatically unlock video audio on the very first click/tap/keypress anywhere on /player
   useEffect(() => {
@@ -1099,26 +1233,64 @@ export function PlayerClient() {
     };
   }, [audioBlocked, isMuted]);
 
-  // Android TV Remote D-Pad & Keyboard Controls (zero-mouse navigation)
+  // Universal Smart TV Remote D-Pad & Keyboard Controls (Tizen, webOS, VIDAA, Android TV, PC)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "ArrowRight" && activeItems.length > 1) {
+      const targetTag =
+        e.target instanceof HTMLElement ? e.target.tagName : undefined;
+      const action = mapRemoteKeyToAction({
+        key: e.key,
+        keyCode: e.keyCode,
+        targetTagName: targetTag,
+      });
+      if (!action) return;
+
+      if (action === "next" && activeItems.length > 1) {
+        setVideoManualPaused(false);
         setCurrentIndex((prev) => (prev + 1) % activeItems.length);
-      } else if (e.key === "ArrowLeft" && activeItems.length > 1) {
+      } else if (action === "prev" && activeItems.length > 1) {
+        setVideoManualPaused(false);
         setCurrentIndex(
           (prev) => (prev - 1 + activeItems.length) % activeItems.length
         );
-      } else if (e.key.toLowerCase() === "m") {
+      } else if (action === "toggle_mute") {
         toggleMuted();
-      } else if (e.key.toLowerCase() === "f") {
-        toggleFullscreen();
-      } else if (e.key === "Escape" && demoMode) {
+        revealRemoteHud();
+      } else if (action === "toggle_fullscreen") {
+        // Only hijack Enter/OK during active playback (not on Pairing screen)
+        if (deviceToken || demoMode) {
+          e.preventDefault();
+          toggleFullscreen();
+          revealRemoteHud();
+        }
+      } else if (action === "toggle_hud") {
+        revealRemoteHud();
+      } else if (action === "toggle_play_pause") {
+        const video = activeVideoRef.current;
+        if (video) {
+          if (video.paused) {
+            setVideoManualPaused(false);
+            void video.play().catch(() => { });
+          } else {
+            setVideoManualPaused(true);
+            video.pause();
+          }
+          revealRemoteHud();
+        }
+      } else if (action === "exit" && demoMode) {
         setDemoMode(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeItems.length, demoMode, toggleMuted, toggleFullscreen]);
+  }, [
+    activeItems.length,
+    demoMode,
+    deviceToken,
+    toggleMuted,
+    toggleFullscreen,
+    revealRemoteHud,
+  ]);
 
   // Record Proof-of-Play event into offline-safe queue whenever a slide finishes
   useEffect(() => {
@@ -1132,7 +1304,7 @@ export function PlayerClient() {
         Math.round((Date.now() - new Date(startedAt).getTime()) / 1000)
       );
       try {
-        const existingRaw = localStorage.getItem("crown_canvas_telemetry_queue");
+        const existingRaw = safeLocalGet("crown_canvas_telemetry_queue");
         const existing = existingRaw ? (JSON.parse(existingRaw) as unknown[]) : [];
         existing.push({
           playlistId,
@@ -1144,7 +1316,7 @@ export function PlayerClient() {
           durationPlayedSeconds: elapsedSec,
           completed: true,
         });
-        localStorage.setItem(
+        safeLocalSet(
           "crown_canvas_telemetry_queue",
           JSON.stringify(existing.slice(-200))
         );
@@ -1198,14 +1370,12 @@ export function PlayerClient() {
 
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-2xs">
-              {hardwareType === "android_tv" ? (
+              {tvProfile.isTvBrowser ? (
                 <Tv className="size-3.5 text-zinc-900" />
               ) : (
                 <Monitor className="size-3.5 text-zinc-900" />
               )}
-              <span>
-                {hardwareType === "android_tv" ? "Android TV" : "Display Kiosk"}
-              </span>
+              <span>{tvProfile.label}</span>
             </div>
             <div className="flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 font-mono text-xs font-medium text-zinc-700 shadow-2xs">
               <Clock className="size-3.5 text-zinc-400" />
@@ -1233,9 +1403,8 @@ export function PlayerClient() {
           </p>
 
           <div
-            className={`mt-8 flex items-center justify-center gap-2.5 transition-opacity duration-200 md:gap-3.5 ${
-              refreshingPin ? "opacity-45" : "opacity-100"
-            }`}
+            className={`mt-8 flex items-center justify-center gap-2.5 transition-opacity duration-200 md:gap-3.5 ${refreshingPin ? "opacity-45" : "opacity-100"
+              }`}
           >
             {codeChars.map((ch, idx) => (
               <div
@@ -1455,28 +1624,56 @@ export function PlayerClient() {
       qrSignatures={!demoMode ? manifest?.qrSignatures : undefined}
     />
   ) : currentItem.mediaType === "video" ? (
-    <video
-      ref={activeVideoRef}
-      key={`${currentItem.id}-${safeIndex}`}
-      src={currentPlaybackUrl || currentItem.publicUrl}
-      className="h-full w-full bg-black object-contain"
-      autoPlay
-      muted={isMuted || audioBlocked}
-      playsInline
-      preload="auto"
-      crossOrigin="anonymous"
-      disablePictureInPicture
-      controlsList="nodownload nofullscreen"
-      onContextMenu={(e) => e.preventDefault()}
-      onDoubleClick={toggleFullscreen}
-      loop={activeItems.length === 1}
-      onEnded={() =>
-        setCurrentIndex((prev) => (prev + 1) % Math.max(1, activeItems.length))
-      }
-      onError={() =>
-        setCurrentIndex((prev) => (prev + 1) % Math.max(1, activeItems.length))
-      }
-    />
+    (() => {
+      const videoSrc = currentPlaybackUrl || currentItem.publicUrl;
+      const slideKey = `${currentItem.id}-${safeIndex}`;
+      const allowCors =
+        corsFallbackKey !== slideKey &&
+        shouldUseVideoCrossOrigin(
+          videoSrc,
+          typeof window !== "undefined" ? window.location.origin : undefined
+        );
+      return (
+        <video
+          ref={activeVideoRef}
+          key={`${slideKey}-${allowCors ? "cors" : "plain"}`}
+          src={videoSrc}
+          className="h-full w-full bg-black object-contain"
+          autoPlay
+          muted={isMuted || audioBlocked}
+          playsInline
+          preload="auto"
+          crossOrigin={allowCors ? "anonymous" : undefined}
+          disablePictureInPicture
+          controlsList="nodownload nofullscreen"
+          onContextMenu={(e) => e.preventDefault()}
+          onDoubleClick={toggleFullscreen}
+          loop={activeItems.length === 1}
+          onStalled={(e) => {
+            if (!videoManualPaused) {
+              void e.currentTarget.play().catch(() => { });
+            }
+          }}
+          onEnded={() => {
+            setVideoManualPaused(false);
+            setCurrentIndex(
+              (prev) => (prev + 1) % Math.max(1, activeItems.length)
+            );
+          }}
+          onError={() => {
+            // If CORS attribute blocked playback on an external video host, retry once without crossOrigin
+            if (allowCors && !videoSrc.startsWith("blob:")) {
+              setCorsFallbackKey(slideKey);
+              return;
+            }
+            setVideoManualPaused(false);
+            setCurrentIndex(
+              (prev) => (prev + 1) % Math.max(1, activeItems.length)
+            );
+          }}
+        />
+      );
+    })()
   ) : currentItem.mediaType === "pdf" ? (
     <PdfSignageViewer
       key={`${currentItem.id}-${safeIndex}`}
@@ -1508,10 +1705,11 @@ export function PlayerClient() {
   return (
     <div
       ref={playerContainerRef}
-      className="relative h-screen w-screen overflow-hidden bg-black text-white select-none"
+      className={`relative h-screen w-screen overflow-hidden bg-black text-white select-none ${cursorHidden ? "player-cursor-hidden" : ""
+        }`}
     >
-      {/* Dual-Buffer Next-Video Preloader for 0ms gapless transitions */}
-      {nextIsVideo && nextPlaybackUrl && (
+      {/* Dual-Buffer Next-Video Preloader (Mini PCs / Desktops only — disabled on Smart TVs to protect single hardware H.264 decoder) */}
+      {!tvProfile.singleVideoDecoder && nextIsVideo && nextPlaybackUrl && (
         <video
           key={`preload-${nextItem.id}`}
           src={nextPlaybackUrl}
@@ -1571,7 +1769,15 @@ export function PlayerClient() {
         </div>
       )}
 
-      {/* Hover-Only Broadcast Telemetry & Controls (invisible until hovering the bottom-right corner) */}
+      {/* Brief Auto-Dismissing Smart TV Remote Hint (6s on launch when not fullscreen or sound blocked) */}
+      {showRemoteHint && !isFullscreen && (
+        <div className="pointer-events-none fixed bottom-20 left-1/2 z-30 -translate-x-1/2 rounded-full border border-white/15 bg-black/80 px-4 py-2 text-xs font-medium text-white/95 shadow-2xl backdrop-blur-md">
+          Press <span className="rounded bg-white/20 px-1.5 py-0.5 font-mono font-bold">OK</span> on remote for Fullscreen &amp; Sound •{" "}
+          <span className="rounded bg-white/20 px-1.5 py-0.5 font-mono font-bold">↑</span> for Controls
+        </div>
+      )}
+
+      {/* Hover & TV-Remote Broadcast Telemetry & Controls (reveals on mouse hover or Up/Info remote key) */}
       <div
         className={`group/hud pointer-events-auto absolute right-0 z-30 flex items-end justify-end p-4 ${hasMultiZoneLayout ||
           Boolean(
@@ -1582,7 +1788,12 @@ export function PlayerClient() {
           : "bottom-0"
           }`}
       >
-        <div className="pointer-events-none flex translate-y-1 items-center gap-2 rounded-full border border-white/15 bg-black/80 px-3.5 py-1.5 text-[11px] font-medium text-white/95 opacity-0 shadow-2xl backdrop-blur-md transition-all duration-200 group-hover/hud:pointer-events-auto group-hover/hud:translate-y-0 group-hover/hud:opacity-100 focus-within:pointer-events-auto focus-within:translate-y-0 focus-within:opacity-100">
+        <div
+          className={`flex items-center gap-2 rounded-full border border-white/15 bg-black/80 px-3.5 py-1.5 text-[11px] font-medium text-white/95 shadow-2xl backdrop-blur-md transition-all duration-200 ${remoteHudVisible
+              ? "pointer-events-auto translate-y-0 opacity-100"
+              : "pointer-events-none translate-y-1 opacity-0 group-hover/hud:pointer-events-auto group-hover/hud:translate-y-0 group-hover/hud:opacity-100 focus-within:pointer-events-auto focus-within:translate-y-0 focus-within:opacity-100"
+            }`}
+        >
           {isOnline ? (
             <Wifi className="size-3 text-emerald-400" />
           ) : (

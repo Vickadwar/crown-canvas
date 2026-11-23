@@ -47,36 +47,48 @@ function openMetaDb(): Promise<IDBDatabase> {
 
 async function getAllMeta(): Promise<CachedAssetMeta[]> {
   if (typeof indexedDB === "undefined") return [];
-  const db = await openMetaDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(IDB_STORE, "readonly");
-    const store = tx.objectStore(IDB_STORE);
-    const req = store.getAll();
-    req.onsuccess = () => resolve(req.result as CachedAssetMeta[]);
-    req.onerror = () => reject(req.error);
-  });
+  try {
+    const db = await openMetaDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result as CachedAssetMeta[]);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
 }
 
 async function putMeta(meta: CachedAssetMeta): Promise<void> {
   if (typeof indexedDB === "undefined") return;
-  const db = await openMetaDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(IDB_STORE, "readwrite");
-    tx.objectStore(IDB_STORE).put(meta);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  try {
+    const db = await openMetaDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).put(meta);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Non-fatal on Smart TV browsers with restricted IndexedDB
+  }
 }
 
 async function deleteMeta(assetId: string): Promise<void> {
   if (typeof indexedDB === "undefined") return;
-  const db = await openMetaDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(IDB_STORE, "readwrite");
-    tx.objectStore(IDB_STORE).delete(assetId);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  try {
+    const db = await openMetaDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).delete(assetId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Non-fatal on Smart TV browsers with restricted IndexedDB
+  }
 }
 
 function buildCacheKey(assetId: string, checksum: string): string {
@@ -113,13 +125,40 @@ export async function requestPersistentPlayerStorage(): Promise<boolean> {
 }
 
 /**
+ * Estimates a safe local Cache Storage budget so inbuilt Smart TV browsers
+ * (Samsung Tizen, LG webOS, Hisense VIDAA) with tight storage quotas never crash.
+ */
+async function computeSafeCacheBudget(profileMaxBytes: number): Promise<number> {
+  try {
+    if (
+      typeof navigator !== "undefined" &&
+      navigator.storage &&
+      typeof navigator.storage.estimate === "function"
+    ) {
+      const est = await navigator.storage.estimate();
+      if (typeof est.quota === "number" && est.quota > 0) {
+        const usage = typeof est.usage === "number" ? est.usage : 0;
+        const available = Math.max(0, est.quota - usage);
+        // Reserve 40% headroom for OS/browser stability on Smart TVs
+        const quotaSafeCap = Math.floor((available + usage * 0.5) * 0.6);
+        return Math.min(profileMaxBytes, Math.max(0, quotaSafeCap));
+      }
+    }
+  } catch {
+    // Fallback to device profile ceiling
+  }
+  return profileMaxBytes;
+}
+
+/**
  * Downloads and verifies all downloadable manifest media assets (video/image) onto
  * local flash Cache Storage without creating all `blob:` URLs in RAM at once.
  */
 export async function syncMediaAssetsToDisk(
   assets: ManifestAssetRef[],
-  hardwareType: "android_tv" | "mini_pc" = "android_tv",
-  onProgress?: (progress: SyncProgress) => void
+  hardwareType: "android_tv" | "mini_pc" | "other" = "android_tv",
+  onProgress?: (progress: SyncProgress) => void,
+  maxCacheBytesOverride?: number
 ): Promise<SyncProgress> {
   const downloadable = assets.filter(
     (a) => a.mediaType !== "web_url" && a.mediaType !== "pdf"
@@ -139,12 +178,43 @@ export async function syncMediaAssetsToDisk(
     return progress;
   }
 
-  const maxCacheBytes =
-    hardwareType === "android_tv"
-      ? 512 * 1024 * 1024 // 512 MB cap on standalone Android TVs
-      : 2048 * 1024 * 1024; // 2 GB cap on Mini PCs
+  const profileCapBytes =
+    maxCacheBytesOverride ??
+    (hardwareType === "mini_pc"
+      ? 2048 * 1024 * 1024 // 2 GB cap on Mini PCs
+      : hardwareType === "other"
+        ? 192 * 1024 * 1024 // 192 MB conservative cap on inbuilt Smart TV browsers
+        : 512 * 1024 * 1024); // 512 MB cap on Android TVs
 
-  const cache = await caches.open(CACHE_NAME);
+  const maxCacheBytes = await computeSafeCacheBudget(profileCapBytes);
+
+  // If Smart TV browser has < 25 MB available storage, stream directly over HTTPS
+  if (maxCacheBytes < 25 * 1024 * 1024) {
+    const progress: SyncProgress = {
+      status: "synced",
+      cachedCount: 0,
+      totalCount: downloadable.length,
+      storageUsedMb: 0,
+      persisted,
+    };
+    onProgress?.(progress);
+    return progress;
+  }
+
+  let cache: Cache;
+  try {
+    cache = await caches.open(CACHE_NAME);
+  } catch {
+    const progress: SyncProgress = {
+      status: "synced",
+      cachedCount: 0,
+      totalCount: downloadable.length,
+      storageUsedMb: 0,
+      persisted,
+    };
+    onProgress?.(progress);
+    return progress;
+  }
   const existingMeta = await getAllMeta();
   const metaById = new Map(existingMeta.map((m) => [m.assetId, m]));
   const activeAssetIds = new Set(downloadable.map((a) => a.assetId));
@@ -152,7 +222,7 @@ export async function syncMediaAssetsToDisk(
   // Evict stale assets no longer in current manifest
   for (const old of existingMeta) {
     if (!activeAssetIds.has(old.assetId)) {
-      await cache.delete(buildCacheKey(old.assetId, old.sha256Checksum));
+      await cache.delete(buildCacheKey(old.assetId, old.sha256Checksum)).catch(() => false);
       await deleteMeta(old.assetId);
       metaById.delete(old.assetId);
     }
@@ -161,6 +231,7 @@ export async function syncMediaAssetsToDisk(
   let cachedCount = 0;
   let totalBytes = 0;
   let lastError: string | undefined;
+  let quotaExhausted = false;
 
   onProgress?.({
     status: downloadable.length > 0 ? "downloading" : "synced",
@@ -173,13 +244,16 @@ export async function syncMediaAssetsToDisk(
   for (const asset of downloadable) {
     const cacheKey = buildCacheKey(asset.assetId, asset.sha256Checksum);
     const meta = metaById.get(asset.assetId);
-    const existingResp = await cache.match(cacheKey);
+    const existingResp = await cache.match(cacheKey).catch(() => undefined);
 
     if (meta && meta.sha256Checksum !== asset.sha256Checksum) {
-      await cache.delete(buildCacheKey(meta.assetId, meta.sha256Checksum));
+      await cache.delete(buildCacheKey(meta.assetId, meta.sha256Checksum)).catch(() => false);
     }
 
     if (!existingResp) {
+      if (quotaExhausted) {
+        continue;
+      }
       try {
         const fetched = await fetch(asset.publicUrl, { mode: "cors" });
         if (!fetched.ok) {
@@ -205,7 +279,12 @@ export async function syncMediaAssetsToDisk(
           lastError = `Device cache cap (${Math.round(maxCacheBytes / (1024 * 1024))} MB) reached`;
         }
       } catch (err) {
-        lastError = err instanceof Error ? err.message : "Download failed";
+        if (err instanceof DOMException && err.name === "QuotaExceededError") {
+          quotaExhausted = true;
+          lastError = "TV browser storage full — streaming remaining media";
+        } else {
+          lastError = err instanceof Error ? err.message : "Download failed";
+        }
       }
     } else {
       const sizeBytes = meta?.sizeBytes ?? (await existingResp.clone().blob()).size;
@@ -269,16 +348,24 @@ export async function resolveAssetPlaybackUrl(
 }
 
 export async function clearPlayerMediaCache(): Promise<void> {
-  if (typeof window !== "undefined" && "caches" in window) {
-    await caches.delete(CACHE_NAME);
+  try {
+    if (typeof window !== "undefined" && "caches" in window) {
+      await caches.delete(CACHE_NAME);
+    }
+  } catch {
+    // Non-fatal on restricted Smart TV browsers
   }
-  if (typeof indexedDB !== "undefined") {
-    const db = await openMetaDb();
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, "readwrite");
-      tx.objectStore(IDB_STORE).clear();
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
+  try {
+    if (typeof indexedDB !== "undefined") {
+      const db = await openMetaDb();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, "readwrite");
+        tx.objectStore(IDB_STORE).clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+  } catch {
+    // Non-fatal on restricted Smart TV browsers
   }
 }

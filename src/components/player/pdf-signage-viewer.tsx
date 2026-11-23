@@ -10,6 +10,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { FileText, Loader2 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 
 interface PdfSignageViewerProps {
   url: string;
@@ -165,6 +166,39 @@ function PdfSignageViewerInner({
   }, [currentPage, pageCount, useIframeFallback]);
 
   if (useIframeFallback) {
+    // Older Smart TV browsers (Samsung Tizen, LG webOS) often lack native inline PDF plugins
+    // and would trigger a blank white iframe or unwanted download dialog. Render a crisp
+    // scannable document card instead when inline PDF viewing is unavailable.
+    const inlinePdfSupported =
+      typeof navigator !== "undefined" &&
+      (navigator as Navigator & { pdfViewerEnabled?: boolean })
+        .pdfViewerEnabled !== false;
+
+    if (!inlinePdfSupported) {
+      return (
+        <div className="flex h-full w-full flex-col items-center justify-center bg-[#FAFAFA] p-10 text-center text-zinc-950">
+          <div className="flex max-w-xl flex-col items-center rounded-3xl border border-zinc-200 bg-white p-10 shadow-[0_12px_40px_rgba(0,0,0,0.06)]">
+            <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+              <FileText className="size-7" />
+            </div>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-zinc-500">
+              Document Preview
+            </p>
+            <h2 className="mt-2 text-2xl font-bold tracking-tight text-zinc-950">
+              {title}
+            </h2>
+            <p className="mt-2 text-sm text-zinc-500">
+              Scan this QR code with your phone to view or download the full PDF
+              brochure.
+            </p>
+            <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-4 shadow-xs">
+              <QRCodeSVG value={url} size={156} level="M" />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <iframe
         src={`${url}#toolbar=0&navpanes=0&scrollbar=0`}

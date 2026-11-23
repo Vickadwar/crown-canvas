@@ -193,10 +193,10 @@ export function MultiZoneFrame({
     tickerMessages.length > 0
       ? tickerMessages
       : [
-          "If you like it... Crown it!",
-          "Ask our Colour Specialists for precision tinting in 1,800+ shades",
-          `Crown Paints • Local Showroom Pricing in ${currencyCode}`,
-        ];
+        "If you like it... Crown it!",
+        "Ask our Colour Specialists for precision tinting in 1,800+ shades",
+        `Crown Paints • Local Showroom Pricing in ${currencyCode}`,
+      ];
 
   const qrDestination =
     sidebarProfile?.qrTargetUrl?.trim() ||
@@ -426,9 +426,8 @@ export function MultiZoneFrame({
             {/* Unobstructed Natural Aspect-Ratio Product Stage */}
             <div className="relative my-2 flex min-h-0 flex-1 items-center justify-center overflow-hidden p-2">
               <div
-                className={`pointer-events-none absolute bottom-1 h-3.5 w-2/3 max-w-[160px] rounded-full blur-md ${
-                  isDarkTheme ? "bg-black/45" : "bg-zinc-900/12"
-                }`}
+                className={`pointer-events-none absolute bottom-1 h-3.5 w-2/3 max-w-[160px] rounded-full blur-md ${isDarkTheme ? "bg-black/45" : "bg-zinc-900/12"
+                  }`}
               />
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -459,9 +458,8 @@ export function MultiZoneFrame({
                 )}
               </div>
               <div
-                className={`h-[3px] w-full overflow-hidden rounded-full ${
-                  isDarkTheme ? "bg-white/15" : "bg-zinc-200/80"
-                }`}
+                className={`h-[3px] w-full overflow-hidden rounded-full ${isDarkTheme ? "bg-white/15" : "bg-zinc-200/80"
+                  }`}
               >
                 <div
                   key={`bar-${currentProduct.id}`}
