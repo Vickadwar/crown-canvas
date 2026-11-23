@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ModernSelect } from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { DataFeedItem, OverviewPayload } from "../cms-types";
 
 interface FeedsTabProps {
@@ -58,6 +59,7 @@ const SAMPLE_PAYLOAD = JSON.stringify(
 );
 
 export function FeedsTab({ data, onRefresh }: FeedsTabProps) {
+  const confirm = useConfirm();
   const [showCreate, setShowCreate] = useState(data.dataFeeds.length === 0);
   const [keySlug, setKeySlug] = useState("");
   const [name, setName] = useState("");
@@ -191,9 +193,14 @@ export function FeedsTab({ data, onRefresh }: FeedsTabProps) {
   }
 
   async function handleRotateKey(feed: DataFeedItem) {
-    if (!window.confirm(`Rotate the webhook API key for "${feed.name}"? Old keys will stop working.`)) {
-      return;
-    }
+    const ok = await confirm({
+      title: `Rotate webhook API key for "${feed.name}"?`,
+      description:
+        "A brand-new API key will be generated and the previous key will immediately stop working.",
+      confirmLabel: "Rotate API Key",
+      variant: "warning",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/feeds/${feed.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -211,7 +218,14 @@ export function FeedsTab({ data, onRefresh }: FeedsTabProps) {
   }
 
   async function handleDeleteFeed(feed: DataFeedItem) {
-    if (!window.confirm(`Delete data feed "${feed.name}"?`)) return;
+    const ok = await confirm({
+      title: `Delete data feed "${feed.name}"?`,
+      description:
+        "Slides linked to this feed will stop receiving live updates. This cannot be undone.",
+      confirmLabel: "Delete Feed",
+      variant: "danger",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/feeds/${feed.id}`, { method: "DELETE" });
     if (!res.ok) {
       toast.error("Failed to delete feed");

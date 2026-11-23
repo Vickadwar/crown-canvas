@@ -28,6 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { OverviewPayload, ScheduleItem } from "../cms-types";
 
 interface SchedulesTabProps {
@@ -46,6 +47,7 @@ const DAY_LABELS = [
 ];
 
 export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
+  const confirm = useConfirm();
   const [showCreate, setShowCreate] = useState(data.schedules.length === 0);
   const [name, setName] = useState("");
   const [playlistId, setPlaylistId] = useState(data.playlists[0]?.id ?? "");
@@ -150,7 +152,14 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
   }
 
   async function handleDelete(s: ScheduleItem) {
-    if (!window.confirm(`Delete schedule "${s.name}"?`)) return;
+    const ok = await confirm({
+      title: `Delete schedule "${s.name}"?`,
+      description:
+        "This removes the daypart automation rule permanently. Screens will resume their default playlists.",
+      confirmLabel: "Delete Schedule",
+      variant: "danger",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/schedules/${s.id}`, { method: "DELETE" });
     if (!res.ok) {
       toast.error("Failed to delete schedule");
@@ -358,11 +367,10 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
                               : [...prev, d.idx]
                           )
                         }
-                        className={`rounded-md px-2 py-1 text-[11px] font-medium transition ${
-                          active
+                        className={`rounded-md px-2 py-1 text-[11px] font-medium transition ${active
                             ? "bg-zinc-950 text-white"
                             : "border border-zinc-200 bg-white text-zinc-500"
-                        }`}
+                          }`}
                       >
                         {d.short}
                       </button>
@@ -464,11 +472,10 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
                       return (
                         <span
                           key={d.idx}
-                          className={`rounded px-2 py-0.5 text-[10px] font-medium ${
-                            on
+                          className={`rounded px-2 py-0.5 text-[10px] font-medium ${on
                               ? "bg-zinc-900 text-white"
                               : "bg-zinc-100 text-zinc-400"
-                          }`}
+                            }`}
                         >
                           {d.short}
                         </span>

@@ -33,6 +33,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { TaglineBuilder } from "@/components/dashboard/tagline-builder";
 import {
   inspectVideoForAndroidTv,
@@ -79,6 +80,7 @@ async function readMediaDuration(file: File): Promise<number> {
 }
 
 export function MediaTab({ data, onRefresh }: MediaTabProps) {
+  const confirm = useConfirm();
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | "video" | "image" | "web">("all");
   const [deptFilter, setDeptFilter] = useState("");
@@ -429,30 +431,30 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
       );
       const nextItems = exists
         ? pl.items
-            .filter(
-              (it) =>
-                !(it.itemKind === "media_asset" && it.mediaAssetId === asset.id)
-            )
-            .map((it) => ({
-              itemKind: it.itemKind,
-              mediaAssetId: it.mediaAssetId ?? null,
-              quickPostId: it.quickPostId ?? null,
-              durationSeconds: it.durationSeconds ?? null,
-            }))
+          .filter(
+            (it) =>
+              !(it.itemKind === "media_asset" && it.mediaAssetId === asset.id)
+          )
+          .map((it) => ({
+            itemKind: it.itemKind,
+            mediaAssetId: it.mediaAssetId ?? null,
+            quickPostId: it.quickPostId ?? null,
+            durationSeconds: it.durationSeconds ?? null,
+          }))
         : [
-            ...pl.items.map((it) => ({
-              itemKind: it.itemKind,
-              mediaAssetId: it.mediaAssetId ?? null,
-              quickPostId: it.quickPostId ?? null,
-              durationSeconds: it.durationSeconds ?? null,
-            })),
-            {
-              itemKind: "media_asset" as const,
-              mediaAssetId: asset.id,
-              quickPostId: null,
-              durationSeconds: asset.durationSeconds || 15,
-            },
-          ];
+          ...pl.items.map((it) => ({
+            itemKind: it.itemKind,
+            mediaAssetId: it.mediaAssetId ?? null,
+            quickPostId: it.quickPostId ?? null,
+            durationSeconds: it.durationSeconds ?? null,
+          })),
+          {
+            itemKind: "media_asset" as const,
+            mediaAssetId: asset.id,
+            quickPostId: null,
+            durationSeconds: asset.durationSeconds || 15,
+          },
+        ];
 
       const res = await fetch(`/api/playlists/${pl.id}/items`, {
         method: "PUT",
@@ -475,9 +477,14 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
   }
 
   async function handleDeleteAsset(asset: MediaAssetItem) {
-    if (!window.confirm(`Permanently delete "${asset.title}" and free cloud storage?`)) {
-      return;
-    }
+    const ok = await confirm({
+      title: `Delete "${asset.title}"?`,
+      description:
+        "This permanently removes the file from cloud storage and any playlists currently referencing it.",
+      confirmLabel: "Delete Asset",
+      variant: "danger",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/media/${asset.id}`, { method: "DELETE" });
     if (!res.ok) {
       toast.error("Failed to delete asset");
@@ -555,11 +562,10 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
             key={pill.id}
             type="button"
             onClick={() => setTypeFilter(pill.id)}
-            className={`rounded-full px-3.5 py-1 text-xs font-medium transition ${
-              typeFilter === pill.id
+            className={`rounded-full px-3.5 py-1 text-xs font-medium transition ${typeFilter === pill.id
                 ? "bg-zinc-950 text-white"
                 : "border border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
-            }`}
+              }`}
           >
             {pill.label}
           </button>
@@ -575,11 +581,10 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                 <button
                   type="button"
                   onClick={() => setAddMode("upload")}
-                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium ${
-                    addMode === "upload"
+                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium ${addMode === "upload"
                       ? "bg-white text-zinc-950 shadow-2xs"
                       : "text-zinc-500 hover:text-zinc-900"
-                  }`}
+                    }`}
                 >
                   <Upload className="size-3.5" />
                   Upload Video / Image
@@ -587,11 +592,10 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                 <button
                   type="button"
                   onClick={() => setAddMode("url")}
-                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium ${
-                    addMode === "url"
+                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium ${addMode === "url"
                       ? "bg-white text-zinc-950 shadow-2xs"
                       : "text-zinc-500 hover:text-zinc-900"
-                  }`}
+                    }`}
                 >
                   <Globe className="size-3.5" />
                   Zero-Disk Web / YouTube / PDF
@@ -700,11 +704,10 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                         </div>
 
                         <p
-                          className={`rounded-lg px-2.5 py-1.5 text-xs ${
-                            compat.level === "optimal"
+                          className={`rounded-lg px-2.5 py-1.5 text-xs ${compat.level === "optimal"
                               ? "bg-emerald-50 text-emerald-700"
                               : "bg-white/80 text-blue-900"
-                          }`}
+                            }`}
                         >
                           {compat.tvReady ? "✓ " : "⚡ "}
                           {compat.summary}
@@ -719,11 +722,10 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                                     ? `Fine-tuning size under 45 MB (${compressionProgress.percent}%)`
                                     : compressionProgress?.stage === "analyzing"
                                       ? "Analyzing video tracks..."
-                                      : `Compressing on GPU (${compressionProgress?.percent ?? 0}%)${
-                                          compressionProgress?.totalSeconds
-                                            ? ` · ${compressionProgress.processedSeconds ?? 0}s / ${compressionProgress.totalSeconds}s`
-                                            : ""
-                                        }`
+                                      : `Compressing on GPU (${compressionProgress?.percent ?? 0}%)${compressionProgress?.totalSeconds
+                                        ? ` · ${compressionProgress.processedSeconds ?? 0}s / ${compressionProgress.totalSeconds}s`
+                                        : ""
+                                      }`
                                   : uploadPhase === "uploading"
                                     ? "Uploading optimized MP4 to cloud..."
                                     : "Saving to Media Library & Playlists..."}
@@ -738,11 +740,10 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                               <div
                                 className="h-full rounded-full bg-blue-600 transition-all duration-200"
                                 style={{
-                                  width: `${
-                                    uploadPhase === "compressing"
+                                  width: `${uploadPhase === "compressing"
                                       ? Math.max(4, compressionProgress?.percent ?? 4)
                                       : 100
-                                  }%`,
+                                    }%`,
                                 }}
                               />
                             </div>
@@ -772,11 +773,10 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                                   : [...prev, pl.id]
                               )
                             }
-                            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition ${
-                              selected
+                            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition ${selected
                                 ? "bg-zinc-950 text-white"
                                 : "border border-zinc-200 bg-white text-zinc-700 hover:border-zinc-400"
-                            }`}
+                              }`}
                           >
                             {selected && <Check className="size-3" />}
                             {pl.name}
@@ -1044,11 +1044,10 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                                 onClick={() =>
                                   void handleToggleAssetInPlaylist(asset, pl)
                                 }
-                                className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs transition ${
-                                  active
+                                className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs transition ${active
                                     ? "bg-zinc-950 font-medium text-white"
                                     : "bg-white text-zinc-700 hover:bg-zinc-100"
-                                }`}
+                                  }`}
                               >
                                 <span className="truncate">{pl.name}</span>
                                 {active ? (

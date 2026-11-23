@@ -16,7 +16,7 @@ export * from "./analytics";
 
 import { countries, regions, branches } from "./locations";
 import { departments } from "./departments";
-import { users, userScopes } from "./auth";
+import { users, userScopes, roles } from "./auth";
 import { screenGroups, screens, screenCommands, pairingCodes } from "./screens";
 import { mediaAssets, mediaFolders } from "./assets";
 import { layouts, dataFeeds, quickPosts, playlists, playlistItems } from "./studio";
@@ -56,6 +56,10 @@ export const departmentsRelations = relations(departments, ({ many }) => ({
   screens: many(screens),
 }));
 
+export const rolesRelations = relations(roles, ({ many }) => ({
+  userScopes: many(userScopes),
+}));
+
 export const usersRelations = relations(users, ({ many }) => ({
   scopes: many(userScopes),
 }));
@@ -64,6 +68,10 @@ export const userScopesRelations = relations(userScopes, ({ one }) => ({
   user: one(users, {
     fields: [userScopes.userId],
     references: [users.id],
+  }),
+  customRole: one(roles, {
+    fields: [userScopes.roleId],
+    references: [roles.id],
   }),
   country: one(countries, {
     fields: [userScopes.countryId],

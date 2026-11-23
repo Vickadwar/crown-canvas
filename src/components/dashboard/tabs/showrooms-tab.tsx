@@ -35,6 +35,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { BranchItem, OverviewPayload } from "../cms-types";
 
 interface ShowroomsTabProps {
@@ -53,6 +54,7 @@ const BRANCH_TYPE_BADGE: Record<
 };
 
 export function ShowroomsTab({ data, onRefresh }: ShowroomsTabProps) {
+  const confirm = useConfirm();
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [regionFilter, setRegionFilter] = useState<string>("");
@@ -204,9 +206,15 @@ export function ShowroomsTab({ data, onRefresh }: ShowroomsTabProps) {
     const attachedScreens = data.screens.filter((s) => s.branchId === b.id).length;
     const confirmMsg =
       attachedScreens > 0
-        ? `"${b.name}" currently has ${attachedScreens} paired screen(s). Deleting it will also remove those paired screens. Continue?`
-        : `Delete location "${b.name}" permanently?`;
-    if (!window.confirm(confirmMsg)) return;
+        ? `"${b.name}" currently has ${attachedScreens} paired screen(s). Deleting it will also remove those paired screens.`
+        : `This permanently deletes location "${b.name}".`;
+    const ok = await confirm({
+      title: `Delete location "${b.name}"?`,
+      description: confirmMsg,
+      confirmLabel: "Delete Location",
+      variant: "danger",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/branches/${b.id}`, { method: "DELETE" });
     if (!res.ok) {
       toast.error("Failed to delete location");

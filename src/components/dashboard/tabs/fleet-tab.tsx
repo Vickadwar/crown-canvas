@@ -41,6 +41,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { OverviewPayload, ScreenItem } from "../cms-types";
 
 interface FleetTabProps {
@@ -49,6 +50,7 @@ interface FleetTabProps {
 }
 
 export function FleetTab({ data, onRefresh }: FleetTabProps) {
+  const confirm = useConfirm();
   // Search, Filters, View & Pagination (handles 100s of screens smoothly)
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<
@@ -278,13 +280,14 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
   }
 
   async function handleRemoveScreen(scr: ScreenItem) {
-    if (
-      !window.confirm(
-        `Unpair and remove "${scr.name}"? The display will return to the 6-digit pairing screen.`
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: `Unpair and remove "${scr.name}"?`,
+      description:
+        "The display will immediately return to the 6-digit pairing screen and stop showing scheduled content.",
+      confirmLabel: "Remove Display",
+      variant: "danger",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/screens/${scr.id}`, { method: "DELETE" });
     if (!res.ok) {
       toast.error("Failed to remove screen");
@@ -490,11 +493,10 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
             <button
               type="button"
               onClick={() => setViewMode("table")}
-              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${
-                viewMode === "table"
+              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${viewMode === "table"
                   ? "bg-white text-zinc-950 shadow-2xs"
                   : "text-zinc-500 hover:text-zinc-900"
-              }`}
+                }`}
             >
               <List className="size-3.5" />
               Table
@@ -502,11 +504,10 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
             <button
               type="button"
               onClick={() => setViewMode("grid")}
-              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${
-                viewMode === "grid"
+              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${viewMode === "grid"
                   ? "bg-white text-zinc-950 shadow-2xs"
                   : "text-zinc-500 hover:text-zinc-900"
-              }`}
+                }`}
             >
               <LayoutGrid className="size-3.5" />
               Grid
@@ -555,11 +556,10 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
               setStatusFilter(pill.id);
               setPage(1);
             }}
-            className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-              statusFilter === pill.id
+            className={`rounded-full px-3 py-1 text-xs font-medium transition ${statusFilter === pill.id
                 ? "bg-zinc-950 text-white"
                 : "border border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
-            }`}
+              }`}
           >
             {pill.label}
           </button>
@@ -1074,9 +1074,8 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
                   return (
                     <tr
                       key={scr.id}
-                      className={`transition hover:bg-zinc-50/70 ${
-                        checked ? "bg-blue-50/40" : ""
-                      }`}
+                      className={`transition hover:bg-zinc-50/70 ${checked ? "bg-blue-50/40" : ""
+                        }`}
                     >
                       <td className="px-3 py-2.5">
                         <input

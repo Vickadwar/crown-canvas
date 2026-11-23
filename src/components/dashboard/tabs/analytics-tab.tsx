@@ -11,11 +11,14 @@ import { useMemo, useState } from "react";
 import {
   Activity,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Download,
   FileBarChart2,
   Printer,
   QrCode,
+  Search,
   Shield,
   Trash2,
   Tv,
@@ -44,6 +47,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ModernSelect } from "@/components/ui/select";
 import type { ExecutiveReportPayload, OverviewPayload } from "../cms-types";
 
 interface AnalyticsTabProps {
@@ -66,6 +71,32 @@ export function AnalyticsTab({ data, onRefresh }: AnalyticsTabProps) {
   const [executiveReport, setExecutiveReport] =
     useState<ExecutiveReportPayload | null>(null);
   const [loadingReport, setLoadingReport] = useState(false);
+
+  // Paginated Audit Log state
+  const [auditSearch, setAuditSearch] = useState("");
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditPageSize, setAuditPageSize] = useState(10);
+
+  const filteredAuditLogs = useMemo(() => {
+    const q = auditSearch.trim().toLowerCase();
+    if (!q) return data.auditLogs;
+    return data.auditLogs.filter(
+      (log) =>
+        log.action.toLowerCase().includes(q) ||
+        log.entityType.toLowerCase().includes(q) ||
+        (log.metadata && JSON.stringify(log.metadata).toLowerCase().includes(q))
+    );
+  }, [data.auditLogs, auditSearch]);
+
+  const auditTotalPages = Math.max(
+    1,
+    Math.ceil(filteredAuditLogs.length / auditPageSize)
+  );
+  const safeAuditPage = Math.min(auditPage, auditTotalPages);
+  const pagedAuditLogs = useMemo(() => {
+    const start = (safeAuditPage - 1) * auditPageSize;
+    return filteredAuditLogs.slice(start, start + auditPageSize);
+  }, [filteredAuditLogs, safeAuditPage, auditPageSize]);
 
   const branchById = useMemo(
     () => new Map(data.branches.map((b) => [b.id, b])),
@@ -717,13 +748,46 @@ export function AnalyticsTab({ data, onRefresh }: AnalyticsTabProps) {
         </Card>
       )}
 
-      {/* Audit Trail Table */}
+      {/* Paginated Audit Trail Table */}
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Recent Administrative Audit Log</CardTitle>
-          <CardDescription>
-            Immutable activity trail across displays, schedules, broadcasts, and content changes
-          </CardDescription>
+        <CardHeader className="flex flex-col gap-3 pb-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="text-base">
+              Recent Administrative Audit Log
+            </CardTitle>
+            <CardDescription>
+              Immutable activity trail across displays, schedules, broadcasts, accounts, and content changes ({filteredAuditLogs.length} events)
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-56">
+              <Search className="pointer-events-none absolute left-2.5 top-2.5 size-3.5 text-zinc-400" />
+              <Input
+                className="h-8 pl-8 text-xs"
+                placeholder="Filter action, entity, details..."
+                value={auditSearch}
+                onChange={(e) => {
+                  setAuditSearch(e.target.value);
+                  setAuditPage(1);
+                }}
+              />
+            </div>
+            <div className="w-28">
+              <ModernSelect
+                size="sm"
+                value={String(auditPageSize)}
+                onValueChange={(v) => {
+                  setAuditPageSize(Number(v) || 10);
+                  setAuditPage(1);
+                }}
+                options={[
+                  { value: "10", label: "10 / page" },
+                  { value: "25", label: "25 / page" },
+                  { value: "50", label: "50 / page" },
+                ]}
+              />
+            </div>
+          </div>
         </CardHeader>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
@@ -736,14 +800,16 @@ export function AnalyticsTab({ data, onRefresh }: AnalyticsTabProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100">
-              {data.auditLogs.length === 0 ? (
+              {pagedAuditLogs.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-4 py-8 text-center text-zinc-500">
-                    No audit events logged yet.
+                    {auditSearch.trim()
+                      ? "No audit events match your filter."
+                      : "No audit events logged yet."}
                   </td>
                 </tr>
               ) : (
-                data.auditLogs.slice(0, 20).map((log) => (
+                pagedAuditLogs.map((log) => (
                   <tr key={log.id} className="hover:bg-zinc-50/60">
                     <td className="px-4 py-2.5">
                       <Badge variant="outline" className="font-mono text-[10px]">
@@ -753,10 +819,10 @@ export function AnalyticsTab({ data, onRefresh }: AnalyticsTabProps) {
                     <td className="px-4 py-2.5 font-medium text-zinc-700">
                       {log.entityType}
                     </td>
-                    <td className="max-w-xs truncate px-4 py-2.5 font-mono text-[11px] text-zinc-500">
+                    <td className="max-w-md truncate px-4 py-2.5 font-mono text-[11px] text-zinc-500">
                       {log.metadata ? JSON.stringify(log.metadata) : "—"}
                     </td>
-                    <td className="px-4 py-2.5 text-right text-[11px] text-zinc-400">
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right text-[11px] text-zinc-400">
                       {new Date(log.createdAt).toLocaleString()}
                     </td>
                   </tr>
@@ -765,6 +831,44 @@ export function AnalyticsTab({ data, onRefresh }: AnalyticsTabProps) {
             </tbody>
           </table>
         </div>
+        {filteredAuditLogs.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-100 px-4 py-3 text-xs text-zinc-500">
+            <span>
+              Showing{" "}
+              <strong className="text-zinc-900">
+                {(safeAuditPage - 1) * auditPageSize + 1}–
+                {Math.min(safeAuditPage * auditPageSize, filteredAuditLogs.length)}
+              </strong>{" "}
+              of <strong className="text-zinc-900">{filteredAuditLogs.length}</strong>{" "}
+              audit records
+            </span>
+            <div className="flex items-center gap-1.5">
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={safeAuditPage <= 1}
+                onClick={() => setAuditPage((p) => Math.max(1, p - 1))}
+              >
+                <ChevronLeft className="size-3.5" />
+                Prev
+              </Button>
+              <span className="px-2 font-mono text-[11px] text-zinc-700">
+                Page {safeAuditPage} / {auditTotalPages}
+              </span>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={safeAuditPage >= auditTotalPages}
+                onClick={() =>
+                  setAuditPage((p) => Math.min(auditTotalPages, p + 1))
+                }
+              >
+                Next
+                <ChevronRight className="size-3.5" />
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
     </div>
   );

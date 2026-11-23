@@ -34,6 +34,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { DepartmentItem, OverviewPayload } from "../cms-types";
 
 interface DepartmentsTabProps {
@@ -53,6 +54,7 @@ const ACCENT_PRESETS = [
 ];
 
 export function DepartmentsTab({ data, onRefresh }: DepartmentsTabProps) {
+  const confirm = useConfirm();
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editingDept, setEditingDept] = useState<DepartmentItem | null>(null);
@@ -145,13 +147,13 @@ export function DepartmentsTab({ data, onRefresh }: DepartmentsTabProps) {
   }
 
   async function handleDelete(dept: DepartmentItem) {
-    if (
-      !window.confirm(
-        `Delete department "${dept.name}" (${dept.code})? If it still owns playlists or media, deactivate it instead.`
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: `Delete department "${dept.name}"?`,
+      description: `Deleting "${dept.name}" (${dept.code}) is permanent. If it still owns playlists or media, deactivate it instead.`,
+      confirmLabel: "Delete Department",
+      variant: "danger",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/departments/${dept.id}`, {
       method: "DELETE",
     });
@@ -248,11 +250,10 @@ export function DepartmentsTab({ data, onRefresh }: DepartmentsTabProps) {
                       key={hex}
                       type="button"
                       onClick={() => setAccentColor(hex)}
-                      className={`size-6 rounded-full border-2 transition ${
-                        accentColor === hex
+                      className={`size-6 rounded-full border-2 transition ${accentColor === hex
                           ? "scale-110 border-zinc-950"
                           : "border-transparent"
-                      }`}
+                        }`}
                       style={{ backgroundColor: hex }}
                     />
                   ))}

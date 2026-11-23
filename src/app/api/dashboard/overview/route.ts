@@ -37,6 +37,8 @@ import {
   matchesUserScopes,
   requireAdminAccess,
 } from "@/lib/auth-guard";
+import { ensureSystemRoles, getAuthPasswordPolicy } from "@/lib/auth-policy";
+import { getSystemRoleName } from "@/lib/permissions";
 import { computeScreenHealth } from "@/lib/screen-health";
 import { getActiveStorageProvider } from "@/lib/storage-provider";
 import {
@@ -249,7 +251,7 @@ export async function GET() {
           .select()
           .from(auditLogs)
           .orderBy(desc(auditLogs.createdAt))
-          .limit(30),
+          .limit(200),
         db.select().from(users).orderBy(desc(users.createdAt)),
         db.select().from(userScopes).orderBy(desc(userScopes.createdAt)),
       ]);
@@ -348,6 +350,12 @@ export async function GET() {
       scopedQuickPosts.filter((p) => p.approvalStatus === "pending_approval")
         .length;
 
+    const [roleRows, authPolicy] = await Promise.all([
+      ensureSystemRoles(),
+      getAuthPasswordPolicy(),
+    ]);
+    const roleById = new Map(roleRows.map((r) => [r.id, r]));
+
     return Response.json({
       configured: true,
       session,
@@ -355,6 +363,19 @@ export async function GET() {
       pendingApprovalsCount,
       supabaseReady,
       storageReady,
+      authPolicy,
+      roles: roleRows.map((r) => ({
+        ...r,
+        memberCount: new Set(
+          scopeRows
+            .filter((s) =>
+              r.isSystem
+                ? s.roleId === r.id || (!s.roleId && s.role === r.slug)
+                : s.roleId === r.id
+            )
+            .map((s) => s.userId)
+        ).size,
+      })),
       storageStats: {
         totalBytesUsed,
         quotaBytes: 1024 * 1024 * 1024, // 1 GB Supabase Free Tier
@@ -384,7 +405,16 @@ export async function GET() {
       auditLogs: auditRows,
       teamUsers: userRows.map((u) => ({
         ...u,
-        scopes: scopeRows.filter((s) => s.userId === u.id),
+        scopes: scopeRows
+          .filter((s) => s.userId === u.id)
+          .map((s) => {
+            const customRole = s.roleId ? roleById.get(s.roleId) : undefined;
+            return {
+              ...s,
+              roleName: customRole?.name ?? getSystemRoleName(s.role),
+              roleColor: customRole?.color ?? null,
+            };
+          }),
       })),
       playlists: scopedPlaylists.map((pl) => ({
         ...pl,

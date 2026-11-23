@@ -8,6 +8,7 @@ import type {
   QuickPostSlideConfig,
 } from "@/db/schema";
 import type { CustomTemplateRecord } from "@/components/studio/canvas-editor";
+import type { PasswordPolicyConfig, RolePermission } from "@/lib/permissions";
 
 export type NavTab =
   | "overview"
@@ -233,13 +234,32 @@ export interface AuditLogItem {
   createdAt: string;
 }
 
+export interface RoleItem {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  color: "purple" | "info" | "success" | "warning" | "outline" | "danger" | string;
+  isSystem: boolean;
+  permissions: RolePermission[];
+  memberCount?: number;
+}
+
 export interface TeamUserItem {
   id: string;
   email: string;
   fullName: string;
+  isActive?: boolean;
+  mustChangePassword?: boolean;
+  passwordChangedAt?: string | null;
+  lastLoginAt?: string | null;
+  createdAt?: string | null;
   scopes: Array<{
     id: string;
     role: string;
+    roleId?: string | null;
+    roleName?: string | null;
+    roleColor?: string | null;
     countryId: string | null;
     branchId: string | null;
     departmentId: string | null;
@@ -249,8 +269,24 @@ export interface TeamUserItem {
 export interface SessionInfo {
   enforceAuth: boolean;
   authenticated: boolean;
+  userId?: string | null;
   email: string | null;
   fullName: string | null;
+  isActive?: boolean;
+  mustChangePassword?: boolean;
+  passwordExpired?: boolean;
+  passwordExpiresInDays?: number | null;
+  passwordPolicy?: PasswordPolicyConfig;
+  permissions?: RolePermission[];
+  scopes?: Array<{
+    id: string;
+    role: string;
+    roleId?: string | null;
+    roleName?: string | null;
+    countryId: string | null;
+    branchId: string | null;
+    departmentId: string | null;
+  }>;
 }
 
 export interface StorageStats {
@@ -293,6 +329,8 @@ export interface OverviewPayload {
   canApprove?: boolean;
   pendingApprovalsCount?: number;
   storageStats?: StorageStats;
+  authPolicy?: PasswordPolicyConfig;
+  roles?: RoleItem[];
   countries: CountryItem[];
   branches: BranchItem[];
   departments: DepartmentItem[];

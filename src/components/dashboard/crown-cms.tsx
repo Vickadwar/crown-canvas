@@ -15,9 +15,11 @@ import {
   Building2,
   CalendarClock,
   CheckCircle2,
+  Clock,
   Database,
   ExternalLink,
   Film,
+  KeyRound,
   LayoutDashboard,
   LayoutTemplate,
   ListVideo,
@@ -25,6 +27,7 @@ import {
   LogOut,
   Radio,
   RefreshCw,
+  Settings2,
   Shield,
   Sparkles,
   Store,
@@ -45,9 +48,12 @@ import {
   createSupabaseBrowserClient,
   isSupabaseConfigured,
 } from "@/lib/supabase/client";
+import { canAccessTab } from "@/lib/permissions";
 import type { CustomTemplateRecord } from "@/components/studio/canvas-editor";
 import type { StudioCanvasDoc } from "@/db/schema";
 import type { NavTab, OverviewPayload, QuickPostItem } from "./cms-types";
+import { AccountModal } from "./account-modal";
+import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 
 import { OverviewTab } from "./tabs/overview-tab";
 import { FleetTab } from "./tabs/fleet-tab";
@@ -138,6 +144,7 @@ export function CrownCms() {
   const [loading, setLoading] = useState(true);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
+  const [showAccountModal, setShowAccountModal] = useState(false);
 
   // Shared cross-tab selection (Playlist & Studio)
   const [selectedPlaylistId, setSelectedPlaylistId] = useState("");
@@ -161,6 +168,31 @@ export function CrownCms() {
         router.push("/login");
         return;
       }
+      if (res.status === 428) {
+        const errPayload = (await res.json().catch(() => ({}))) as {
+          reason?: string;
+        };
+        router.push(
+          `/change-password?reason=${encodeURIComponent(errPayload.reason || "temporary")}`
+        );
+        return;
+      }
+      if (res.status === 403) {
+        const errPayload = (await res.json().catch(() => ({}))) as {
+          code?: string;
+          error?: string;
+        };
+        if (errPayload.code === "ACCOUNT_SUSPENDED") {
+          router.push("/login?error=suspended");
+          return;
+        }
+        if (errPayload.code === "NO_ROLE") {
+          router.push("/login?error=no_role");
+          return;
+        }
+        setOverviewError(errPayload.error || "Access denied.");
+        return;
+      }
       if (!res.ok) {
         const errPayload = (await res.json().catch(() => ({}))) as {
           error?: string;
@@ -171,6 +203,18 @@ export function CrownCms() {
         return;
       }
       const payload = (await res.json()) as OverviewPayload;
+
+      if (payload.session?.enforceAuth && payload.session.authenticated) {
+        if (payload.session.mustChangePassword) {
+          router.push("/change-password?reason=temporary");
+          return;
+        }
+        if (payload.session.passwordExpired) {
+          router.push("/change-password?reason=expired");
+          return;
+        }
+      }
+
       setOverviewError(null);
       setData(payload);
 
@@ -424,8 +468,8 @@ export function CrownCms() {
     [data?.overrides]
   );
 
-  const navGroups: NavGroup[] = useMemo(
-    () => [
+  const navGroups: NavGroup[] = useMemo(() => {
+    const rawGroups: NavGroup[] = [
       {
         label: "Network & Fleet",
         items: [
@@ -502,13 +546,25 @@ export function CrownCms() {
           { id: "team", label: "Team & Access", icon: Shield },
         ],
       },
-    ],
-    [data, onlineScreensCount, activeOverridesCount]
-  );
+    ];
+
+    if (!data?.session?.enforceAuth || !data.session.permissions) {
+      return rawGroups;
+    }
+
+    const perms = data.session.permissions;
+    return rawGroups
+      .map((g) => ({
+        ...g,
+        items: g.items.filter((item) => canAccessTab(perms, item.id)),
+      }))
+      .filter((g) => g.items.length > 0);
+  }, [data, onlineScreensCount, activeOverridesCount]);
 
   const activeMeta = TAB_META[activeTab];
 
   return (
+    <ConfirmProvider>
     <div className="flex min-h-screen bg-[#fafafa] text-zinc-950">
       {/* Grouped Minimalist Sidebar */}
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-zinc-200 bg-white lg:flex">
@@ -604,17 +660,31 @@ export function CrownCms() {
             <ExternalLink className="size-3 text-zinc-400" />
           </Link>
 
-          <div className="flex items-center justify-between px-1 pt-0.5">
+          <div className="flex items-center justify-between gap-1 px-1 pt-0.5">
             {data?.session?.authenticated ? (
               <>
-                <div className="min-w-0">
-                  <p className="truncate text-xs font-medium text-zinc-900">
-                    {data.session.fullName || data.session.email}
-                  </p>
-                  <p className="truncate text-[10px] text-zinc-500">
-                    {data.session.email}
-                  </p>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAccountModal(true)}
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-1 text-left transition hover:bg-zinc-100"
+                  title="My Account & Password Settings"
+                >
+                  <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-[11px] font-semibold text-white">
+                    {(data.session.fullName || data.session.email || "U")
+                      .slice(0, 2)
+                      .toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium text-zinc-900">
+                      {data.session.fullName || data.session.email}
+                    </p>
+                    <p className="truncate text-[10px] text-zinc-500">
+                      {data.session.scopes?.[0]?.roleName ||
+                        data.session.email}
+                    </p>
+                  </div>
+                  <Settings2 className="size-3.5 shrink-0 text-zinc-400" />
+                </button>
                 <Button
                   size="icon-xs"
                   variant="ghost"
@@ -704,6 +774,29 @@ export function CrownCms() {
           </div>
         </header>
 
+        {/* Password Expiring Soon Warning Banner */}
+        {data?.session?.authenticated &&
+          data.session.passwordExpiresInDays !== null &&
+          data.session.passwordExpiresInDays !== undefined &&
+          data.session.passwordExpiresInDays <= 7 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs text-amber-950">
+              <span className="flex items-center gap-2">
+                <Clock className="size-3.5 text-amber-600" />
+                Your password expires in{" "}
+                <strong>{data.session.passwordExpiresInDays} day(s)</strong>.
+                Update it now to avoid interruption.
+              </span>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => setShowAccountModal(true)}
+              >
+                <KeyRound className="size-3" />
+                Update Password
+              </Button>
+            </div>
+          )}
+
         {/* Mobile Tab Strip */}
         <div className="flex gap-1.5 overflow-x-auto border-b border-zinc-200 bg-white px-4 py-2 lg:hidden">
           {navGroups.flatMap((g) => g.items).map((item) => (
@@ -722,10 +815,10 @@ export function CrownCms() {
           ))}
         </div>
 
-        {/* Workspace Canvas */}
+        {/* Workspace Canvas — full available width with clean breathing margins */}
         <main
-          className={`flex-1 ${
-            activeTab === "studio" ? "p-4" : "mx-auto w-full max-w-[1440px] p-6"
+          className={`w-full flex-1 ${
+            activeTab === "studio" ? "p-3.5" : "px-5 py-5"
           }`}
         >
           {overviewError && !data ? (
@@ -840,6 +933,16 @@ export function CrownCms() {
           )}
         </main>
       </div>
+
+      {showAccountModal && data && (
+        <AccountModal
+          data={data}
+          onClose={() => setShowAccountModal(false)}
+          onRefresh={fetchOverview}
+          onSignOut={handleSignOut}
+        />
+      )}
     </div>
+    </ConfirmProvider>
   );
 }

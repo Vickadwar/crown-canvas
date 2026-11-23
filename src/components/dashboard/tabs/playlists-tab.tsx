@@ -51,6 +51,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { TaglineBuilder } from "@/components/dashboard/tagline-builder";
 import type {
   OverviewPayload,
@@ -102,11 +103,10 @@ function SortablePlaylistItemRow({
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition ${
-        isDragging
+      className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition ${isDragging
           ? "z-20 border-blue-500 bg-blue-50/70 shadow-lg"
           : "border-zinc-200 bg-white hover:border-zinc-300"
-      }`}
+        }`}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
         <button
@@ -183,6 +183,7 @@ export function PlaylistsTab({
   onSelectPlaylist,
   onRefresh,
 }: PlaylistsTabProps) {
+  const confirm = useConfirm();
   const [searchPl, setSearchPl] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -305,7 +306,14 @@ export function PlaylistsTab({
   }
 
   async function handleDeletePlaylist(pl: PlaylistRecord) {
-    if (!window.confirm(`Delete playlist "${pl.name}"?`)) return;
+    const ok = await confirm({
+      title: `Delete playlist "${pl.name}"?`,
+      description:
+        "Screens assigned to this playlist will fall back to their next scheduled or default playlist.",
+      confirmLabel: "Delete Playlist",
+      variant: "danger",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/playlists/${pl.id}`, { method: "DELETE" });
     if (!res.ok) {
       toast.error("Failed to delete playlist");
@@ -448,11 +456,10 @@ export function PlaylistsTab({
                 <div
                   key={pl.id}
                   onClick={() => onSelectPlaylist(pl.id)}
-                  className={`cursor-pointer rounded-xl border p-3 transition ${
-                    isSelected
+                  className={`cursor-pointer rounded-xl border p-3 transition ${isSelected
                       ? "border-zinc-950 bg-zinc-50 shadow-2xs"
                       : "border-zinc-200 bg-white hover:border-zinc-300"
-                  }`}
+                    }`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -584,22 +591,20 @@ export function PlaylistsTab({
                       <button
                         type="button"
                         onClick={() => setPickerTab("media")}
-                        className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-                          pickerTab === "media"
+                        className={`rounded-md px-2.5 py-1 text-xs font-medium ${pickerTab === "media"
                             ? "bg-zinc-950 text-white"
                             : "text-zinc-600"
-                        }`}
+                          }`}
                       >
                         Media Library ({data.mediaAssets.length})
                       </button>
                       <button
                         type="button"
                         onClick={() => setPickerTab("studio")}
-                        className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-                          pickerTab === "studio"
+                        className={`rounded-md px-2.5 py-1 text-xs font-medium ${pickerTab === "studio"
                             ? "bg-zinc-950 text-white"
                             : "text-zinc-600"
-                        }`}
+                          }`}
                       >
                         Crown Studio Slides ({data.quickPosts.length})
                       </button>
@@ -624,65 +629,65 @@ export function PlaylistsTab({
                   <div className="grid max-h-52 gap-2 overflow-y-auto sm:grid-cols-2">
                     {pickerTab === "media"
                       ? data.mediaAssets
-                          .filter((m) =>
-                            m.title
-                              .toLowerCase()
-                              .includes(pickerSearch.trim().toLowerCase())
-                          )
-                          .map((m) => (
-                            <button
-                              key={m.id}
-                              type="button"
-                              onClick={() =>
-                                handleAppendItem(
-                                  "media_asset",
-                                  m.id,
-                                  m.durationSeconds || 15
-                                )
-                              }
-                              className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-xs transition hover:border-zinc-950"
-                            >
-                              <div className="min-w-0">
-                                <p className="truncate font-semibold">
-                                  {m.title}
-                                </p>
-                                <p className="text-[10px] text-zinc-500">
-                                  {m.mediaType} • {m.durationSeconds}s
-                                </p>
-                              </div>
-                              <Plus className="size-3.5 shrink-0 text-blue-600" />
-                            </button>
-                          ))
+                        .filter((m) =>
+                          m.title
+                            .toLowerCase()
+                            .includes(pickerSearch.trim().toLowerCase())
+                        )
+                        .map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() =>
+                              handleAppendItem(
+                                "media_asset",
+                                m.id,
+                                m.durationSeconds || 15
+                              )
+                            }
+                            className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-xs transition hover:border-zinc-950"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold">
+                                {m.title}
+                              </p>
+                              <p className="text-[10px] text-zinc-500">
+                                {m.mediaType} • {m.durationSeconds}s
+                              </p>
+                            </div>
+                            <Plus className="size-3.5 shrink-0 text-blue-600" />
+                          </button>
+                        ))
                       : data.quickPosts
-                          .filter((q) =>
-                            q.title
-                              .toLowerCase()
-                              .includes(pickerSearch.trim().toLowerCase())
-                          )
-                          .map((q) => (
-                            <button
-                              key={q.id}
-                              type="button"
-                              onClick={() =>
-                                handleAppendItem(
-                                  "quick_post",
-                                  q.id,
-                                  q.durationSeconds || 15
-                                )
-                              }
-                              className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-xs transition hover:border-zinc-950"
-                            >
-                              <div className="min-w-0">
-                                <p className="truncate font-semibold">
-                                  {q.title}
-                                </p>
-                                <p className="text-[10px] text-zinc-500">
-                                  Studio Slide • {q.durationSeconds}s
-                                </p>
-                              </div>
-                              <Plus className="size-3.5 shrink-0 text-violet-600" />
-                            </button>
-                          ))}
+                        .filter((q) =>
+                          q.title
+                            .toLowerCase()
+                            .includes(pickerSearch.trim().toLowerCase())
+                        )
+                        .map((q) => (
+                          <button
+                            key={q.id}
+                            type="button"
+                            onClick={() =>
+                              handleAppendItem(
+                                "quick_post",
+                                q.id,
+                                q.durationSeconds || 15
+                              )
+                            }
+                            className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-xs transition hover:border-zinc-950"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold">
+                                {q.title}
+                              </p>
+                              <p className="text-[10px] text-zinc-500">
+                                Studio Slide • {q.durationSeconds}s
+                              </p>
+                            </div>
+                            <Plus className="size-3.5 shrink-0 text-violet-600" />
+                          </button>
+                        ))}
                   </div>
                 </div>
               )}

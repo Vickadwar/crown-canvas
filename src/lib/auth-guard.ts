@@ -1,18 +1,37 @@
 /**
  * @file src/lib/auth-guard.ts
- * @description Enterprise Supabase Auth + scoped RBAC guard (`super_admin`, `country_manager`,
- * `department_lead`, `branch_manager`, `content_editor`, `auditor`) enforced when
- * `NEXT_PUBLIC_REQUIRE_AUTH=true`.
+ * @description Enterprise Supabase Auth + Custom/System Scoped RBAC guard with immediate
+ * suspension lockout, forced first-login password change, and configurable password expiry.
  */
 
 import { eq } from "drizzle-orm";
-import { db, isDatabaseConfigured, withDbRetry, userScopes, users } from "@/db";
+import {
+  db,
+  isDatabaseConfigured,
+  withDbRetry,
+  roles,
+  userScopes,
+  users,
+} from "@/db";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
+import { getAuthPasswordPolicy } from "@/lib/auth-policy";
+import {
+  ALL_PERMISSIONS,
+  DEFAULT_PASSWORD_POLICY,
+  computePasswordExpiryStatus,
+  getSystemRoleName,
+  hasPermission,
+  resolveEffectivePermissions,
+  type PasswordPolicyConfig,
+  type RolePermission,
+} from "@/lib/permissions";
 
 export interface UserScopeEntry {
   id: string;
   role: string;
+  roleId: string | null;
+  roleName: string;
   countryId: string | null;
   branchId: string | null;
   departmentId: string | null;
@@ -24,6 +43,12 @@ export interface SessionAccessContext {
   userId: string | null;
   email: string | null;
   fullName: string | null;
+  isActive: boolean;
+  mustChangePassword: boolean;
+  passwordExpired: boolean;
+  passwordExpiresInDays: number | null;
+  passwordPolicy: PasswordPolicyConfig;
+  permissions: RolePermission[];
   scopes: UserScopeEntry[];
 }
 
@@ -31,18 +56,32 @@ export function isAuthEnforced(): boolean {
   return process.env.NEXT_PUBLIC_REQUIRE_AUTH === "true";
 }
 
+function createAnonymousSession(
+  enforceAuth: boolean,
+  passwordPolicy: PasswordPolicyConfig
+): SessionAccessContext {
+  return {
+    enforceAuth,
+    authenticated: false,
+    userId: null,
+    email: null,
+    fullName: null,
+    isActive: true,
+    mustChangePassword: false,
+    passwordExpired: false,
+    passwordExpiresInDays: null,
+    passwordPolicy,
+    permissions: enforceAuth ? [] : [...ALL_PERMISSIONS],
+    scopes: [],
+  };
+}
+
 export async function getSessionAccess(): Promise<SessionAccessContext> {
   const enforceAuth = isAuthEnforced();
+  const passwordPolicy = await getAuthPasswordPolicy();
 
   if (!isSupabaseConfigured()) {
-    return {
-      enforceAuth,
-      authenticated: false,
-      userId: null,
-      email: null,
-      fullName: null,
-      scopes: [],
-    };
+    return createAnonymousSession(enforceAuth, passwordPolicy);
   }
 
   try {
@@ -57,30 +96,74 @@ export async function getSessionAccess(): Promise<SessionAccessContext> {
     ]);
 
     if (!user) {
-      return {
-        enforceAuth,
-        authenticated: false,
-        userId: null,
-        email: null,
-        fullName: null,
-        scopes: [],
-      };
+      return createAnonymousSession(enforceAuth, passwordPolicy);
     }
 
     let scopes: UserScopeEntry[] = [];
     let fullName =
       (user.user_metadata?.full_name as string) || user.email || "User";
+    let isActive = true;
+    let mustChangePassword = false;
+    let passwordChangedAt: Date | string | null = null;
+    let permissions: RolePermission[] = [];
 
     if (isDatabaseConfigured()) {
       await withDbRetry(async () => {
-        const [existingUser] = await db
+        let [dbUser] = await db
           .select()
           .from(users)
           .where(eq(users.id, user.id));
-        let dbUser = existingUser;
 
-        // Auto-bootstrap first authenticated user as Super Admin
-        if (!dbUser && user.email) {
+        const normalizedEmail = user.email?.trim().toLowerCase();
+
+        // Reconcile any pre-staged user row created by email before Auth UUID sync
+        if (!dbUser && normalizedEmail) {
+          const [byEmail] = await db
+            .select()
+            .from(users)
+            .where(eq(users.email, normalizedEmail));
+
+          if (byEmail && byEmail.id !== user.id) {
+            const oldId = byEmail.id;
+            const oldScopes = await db
+              .select()
+              .from(userScopes)
+              .where(eq(userScopes.userId, oldId));
+
+            await db.delete(users).where(eq(users.id, oldId));
+
+            const [recreated] = await db
+              .insert(users)
+              .values({
+                id: user.id,
+                email: normalizedEmail,
+                fullName: byEmail.fullName,
+                avatarUrl: byEmail.avatarUrl,
+                isActive: byEmail.isActive,
+                mustChangePassword: byEmail.mustChangePassword,
+                passwordChangedAt: byEmail.passwordChangedAt,
+                lastLoginAt: new Date(),
+              })
+              .returning();
+            dbUser = recreated;
+
+            if (oldScopes.length > 0 && recreated) {
+              await db.insert(userScopes).values(
+                oldScopes.map((s) => ({
+                  userId: recreated.id,
+                  role: s.role,
+                  roleId: s.roleId,
+                  countryId: s.countryId,
+                  branchId: s.branchId,
+                  departmentId: s.departmentId,
+                }))
+              );
+            }
+          }
+        }
+
+        // Auto-bootstrap first authenticated user as Super Admin if zero users exist
+        if (!dbUser && normalizedEmail) {
           const existingCount = await db
             .select({ id: users.id })
             .from(users)
@@ -90,8 +173,12 @@ export async function getSessionAccess(): Promise<SessionAccessContext> {
             .insert(users)
             .values({
               id: user.id,
-              email: user.email,
+              email: normalizedEmail,
               fullName,
+              isActive: true,
+              mustChangePassword: false,
+              passwordChangedAt: new Date(),
+              lastLoginAt: new Date(),
             })
             .onConflictDoNothing()
             .returning();
@@ -107,22 +194,60 @@ export async function getSessionAccess(): Promise<SessionAccessContext> {
 
         if (dbUser) {
           fullName = dbUser.fullName;
+          isActive = dbUser.isActive;
+          mustChangePassword = dbUser.mustChangePassword ?? false;
+          passwordChangedAt = dbUser.passwordChangedAt ?? dbUser.createdAt;
+
+          // Stamp lastLoginAt at most every 15 minutes to avoid DB write chatter
+          const lastMs = dbUser.lastLoginAt ? dbUser.lastLoginAt.getTime() : 0;
+          if (Date.now() - lastMs > 15 * 60 * 1000) {
+            await db
+              .update(users)
+              .set({ lastLoginAt: new Date() })
+              .where(eq(users.id, dbUser.id))
+              .catch(() => undefined);
+          }
         }
 
-        const dbScopes = await db
-          .select()
-          .from(userScopes)
-          .where(eq(userScopes.userId, user.id));
+        const [dbScopes, roleRows] = await Promise.all([
+          db.select().from(userScopes).where(eq(userScopes.userId, user.id)),
+          db
+            .select()
+            .from(roles)
+            .catch(() => []),
+        ]);
 
-        scopes = dbScopes.map((s) => ({
-          id: s.id,
-          role: s.role,
-          countryId: s.countryId,
-          branchId: s.branchId,
-          departmentId: s.departmentId,
-        }));
+        const roleById = new Map(roleRows.map((r) => [r.id, r]));
+
+        scopes = dbScopes.map((s) => {
+          const customRole = s.roleId ? roleById.get(s.roleId) : undefined;
+          return {
+            id: s.id,
+            role: s.role,
+            roleId: s.roleId ?? null,
+            roleName: customRole?.name ?? getSystemRoleName(s.role),
+            countryId: s.countryId,
+            branchId: s.branchId,
+            departmentId: s.departmentId,
+          };
+        });
+
+        permissions = resolveEffectivePermissions(
+          scopes,
+          new Map(
+            roleRows.map((r) => [
+              r.id,
+              { permissions: (r.permissions ?? []) as RolePermission[] },
+            ])
+          )
+        );
       });
     }
+
+    const expiry = computePasswordExpiryStatus(
+      passwordChangedAt,
+      passwordPolicy.passwordExpiryDays
+    );
 
     return {
       enforceAuth,
@@ -130,17 +255,16 @@ export async function getSessionAccess(): Promise<SessionAccessContext> {
       userId: user.id,
       email: user.email ?? null,
       fullName,
+      isActive,
+      mustChangePassword,
+      passwordExpired: expiry.expired,
+      passwordExpiresInDays: expiry.expiresInDays,
+      passwordPolicy,
+      permissions: enforceAuth ? permissions : [...ALL_PERMISSIONS],
       scopes,
     };
   } catch {
-    return {
-      enforceAuth,
-      authenticated: false,
-      userId: null,
-      email: null,
-      fullName: null,
-      scopes: [],
-    };
+    return createAnonymousSession(enforceAuth, DEFAULT_PASSWORD_POLICY);
   }
 }
 
@@ -149,11 +273,14 @@ export interface AccessRequirement {
   branchId?: string | null;
   departmentId?: string | null;
   disallowAuditor?: boolean;
+  permission?: RolePermission;
+  allowPendingPasswordChange?: boolean;
 }
 
 /**
  * Guards CMS mutation and admin APIs when `NEXT_PUBLIC_REQUIRE_AUTH=true`.
- * Returns `null` if allowed, or an HTTP 401/403 `Response` if blocked.
+ * Enforces authentication, suspension lockout, mandatory password change/expiry,
+ * granular role permissions, and organizational scopes.
  */
 export async function requireAdminAccess(
   req?: AccessRequirement
@@ -167,8 +294,43 @@ export async function requireAdminAccess(
     return {
       session,
       errorResponse: Response.json(
-        { error: "Authentication required. Please sign in at /login." },
+        {
+          code: "UNAUTHENTICATED",
+          error: "Authentication required. Please sign in at /login.",
+        },
         { status: 401 }
+      ),
+    };
+  }
+
+  if (!session.isActive) {
+    return {
+      session,
+      errorResponse: Response.json(
+        {
+          code: "ACCOUNT_SUSPENDED",
+          error: "Your account has been suspended. Contact your administrator.",
+        },
+        { status: 403 }
+      ),
+    };
+  }
+
+  if (
+    !req?.allowPendingPasswordChange &&
+    (session.mustChangePassword || session.passwordExpired)
+  ) {
+    return {
+      session,
+      errorResponse: Response.json(
+        {
+          code: "PASSWORD_CHANGE_REQUIRED",
+          reason: session.mustChangePassword ? "temporary" : "expired",
+          error: session.mustChangePassword
+            ? "You must replace your temporary password before continuing."
+            : "Your password has expired. Please set a new password to continue.",
+        },
+        { status: 428 }
       ),
     };
   }
@@ -177,7 +339,10 @@ export async function requireAdminAccess(
     return {
       session,
       errorResponse: Response.json(
-        { error: "No RBAC role assigned to your account yet." },
+        {
+          code: "NO_ROLE",
+          error: "No role assigned to your account yet. Contact your administrator.",
+        },
         { status: 403 }
       ),
     };
@@ -190,12 +355,24 @@ export async function requireAdminAccess(
 
   if (
     req?.disallowAuditor &&
-    session.scopes.every((s) => s.role === "auditor")
+    session.scopes.every((s) => s.role === "auditor" && !s.roleId)
   ) {
     return {
       session,
       errorResponse: Response.json(
         { error: "Auditors have read-only access." },
+        { status: 403 }
+      ),
+    };
+  }
+
+  if (req?.permission && !hasPermission(session.permissions, req.permission)) {
+    return {
+      session,
+      errorResponse: Response.json(
+        {
+          error: `Missing required permission (${req.permission}). Contact your administrator.`,
+        },
         { status: 403 }
       ),
     };
@@ -222,7 +399,7 @@ export async function requireAdminAccess(
     return {
       session,
       errorResponse: Response.json(
-        { error: "Insufficient country, branch, or department scope." },
+        { error: "Insufficient region, location, or department scope." },
         { status: 403 }
       ),
     };
@@ -233,14 +410,16 @@ export async function requireAdminAccess(
 
 /**
  * Maker-Checker approval helper:
- * `super_admin`, `country_manager`, and `department_lead` (or unauthenticated POC mode)
- * auto-approve their own uploads/slides; `branch_manager` and `content_editor` submit
- * into `pending_approval` for governance review.
+ * Users with `media:approve` (Super Admin, Regional Manager, Department Lead,
+ * or custom approver roles) auto-approve their uploads/slides.
  */
 export function canAutoApproveContent(session: SessionAccessContext): boolean {
   if (!session.enforceAuth) return true;
-  return session.scopes.some((s) =>
-    ["super_admin", "country_manager", "department_lead"].includes(s.role)
+  return (
+    hasPermission(session.permissions, "media:approve") ||
+    session.scopes.some((s) =>
+      ["super_admin", "country_manager", "department_lead"].includes(s.role)
+    )
   );
 }
 
