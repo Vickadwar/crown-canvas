@@ -44,6 +44,7 @@ interface MultiZoneFrameProps {
   clockText: string;
   tickerMessages: string[];
   orientation?: "landscape" | "portrait";
+  sidebarSide?: "left" | "right";
   sidebarConfig?: PlaylistSidebarConfig | null;
   sidebarProfile?: ActiveSidebarProfile | null;
   showcaseProducts?: CrownProductItem[];
@@ -108,6 +109,7 @@ export function MultiZoneFrame({
   clockText,
   tickerMessages,
   orientation = "landscape",
+  sidebarSide = "right",
   sidebarConfig,
   sidebarProfile,
   showcaseProducts,
@@ -119,10 +121,7 @@ export function MultiZoneFrame({
   const [productIndex, setProductIndex] = useState(0);
 
   const products = useMemo(
-    () =>
-      showcaseProducts && showcaseProducts.length > 0
-        ? showcaseProducts
-        : CROWN_PRODUCT_SHOWCASE,
+    () => (showcaseProducts !== undefined ? showcaseProducts : CROWN_PRODUCT_SHOWCASE),
     [showcaseProducts]
   );
 
@@ -162,8 +161,9 @@ export function MultiZoneFrame({
     return () => clearInterval(timer);
   }, [products.length, slideIntervalMs]);
 
-  const safeProductIndex = productIndex % Math.max(1, products.length);
-  const currentProduct = products[safeProductIndex] ?? CROWN_PRODUCT_SHOWCASE[0];
+  const safeProductIndex =
+    products.length > 0 ? productIndex % products.length : 0;
+  const currentProduct = products[safeProductIndex] ?? null;
 
   const themeKey =
     sidebarProfile?.theme && sidebarProfile.theme in THEME_MAP
@@ -283,6 +283,7 @@ export function MultiZoneFrame({
           </div>
 
           {/* Natural Proportions Product Card */}
+          {currentProduct && (
           <div
             className={`relative flex items-center gap-3 overflow-hidden rounded-2xl border p-3 ${theme.stageBg}`}
           >
@@ -309,6 +310,7 @@ export function MultiZoneFrame({
               </p>
             </div>
           </div>
+          )}
 
           {/* Tracked QR Card */}
           {showQr && (
@@ -341,15 +343,21 @@ export function MultiZoneFrame({
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-white text-zinc-950">
       {/* Top Split Area: Fluid Primary Stage + Proportional Non-Squeezing Sidebar */}
-      <div className="flex min-h-0 flex-1">
+      <div
+        className={`flex min-h-0 flex-1 ${
+          sidebarSide === "left" ? "flex-row-reverse" : "flex-row"
+        }`}
+      >
         {/* Main Primary Stage */}
         <div className="relative h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-black">
           {children}
         </div>
 
-        {/* Right Responsive Showroom Sidebar: clamp width keeps 32" 720p & 65" 4K balanced */}
+        {/* Responsive Showroom Sidebar: clamp width keeps 32" 720p & 65" 4K balanced */}
         <aside
-          className={`flex h-full min-h-0 w-[clamp(260px,24vw,430px)] shrink-0 flex-col gap-2.5 border-l p-3 xl:gap-3 xl:p-4 ${theme.asideBg}`}
+          className={`flex h-full min-h-0 w-[clamp(260px,24vw,430px)] shrink-0 flex-col gap-2.5 p-3 xl:gap-3 xl:p-4 ${
+            sidebarSide === "left" ? "border-r" : "border-l"
+          } ${theme.asideBg}`}
         >
           {/* 1. Compact Clock, Location & Weather Card */}
           {(showClock || showWeather) && (
@@ -406,6 +414,7 @@ export function MultiZoneFrame({
           )}
 
           {/* 2. Natural-Proportion Product Showcase Stage (Zero Squeezing Across All TV Sizes) */}
+          {currentProduct && (
           <div
             className={`relative flex min-h-[160px] flex-1 flex-col justify-between overflow-hidden rounded-2xl border p-3.5 xl:p-4 ${theme.stageBg}`}
           >
@@ -471,6 +480,7 @@ export function MultiZoneFrame({
               </div>
             </div>
           </div>
+          )}
 
           {/* 3. Auto-Tracked Signed QR Attribution Card */}
           {showQr && (

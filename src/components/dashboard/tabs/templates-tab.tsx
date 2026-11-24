@@ -7,19 +7,22 @@
  */
 
 import { useMemo, useState } from "react";
-import { Plus, Search, Sparkles, Trash2 } from "lucide-react";
+import { Edit3, Plus, Search, Sparkles, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { CanvasRenderer } from "@/components/player/canvas-renderer";
+import { QuickPostSlide } from "@/components/player/quick-post-slide";
 import type { CustomTemplateRecord } from "@/components/studio/canvas-editor";
 import {
   BUILT_IN_STUDIO_TEMPLATES,
   type BuiltInStudioTemplate,
   type TemplateCategoryFilter,
 } from "@/lib/studio-templates";
-import type { OverviewPayload } from "../cms-types";
+import type { OverviewPayload, QuickPostItem } from "../cms-types";
 
 interface TemplatesTabProps {
   data: OverviewPayload;
@@ -27,6 +30,8 @@ interface TemplatesTabProps {
   onOpenCustom: (ct: CustomTemplateRecord) => void;
   onDeleteCustom: (id: string) => Promise<void>;
   onCreateBlank: (orientation: "landscape" | "portrait") => void;
+  onEditPublishedSlide?: (qp: QuickPostItem) => void;
+  onRefresh?: () => Promise<void>;
 }
 
 const CATEGORY_BADGE: Record<
@@ -45,9 +50,49 @@ export function TemplatesTab({
   onOpenCustom,
   onDeleteCustom,
   onCreateBlank,
+  onEditPublishedSlide,
+  onRefresh,
 }: TemplatesTabProps) {
+  const confirm = useConfirm();
+  const [viewMode, setViewMode] = useState<"templates" | "published">("templates");
   const [filter, setFilter] = useState<TemplateCategoryFilter>("all");
   const [search, setSearch] = useState("");
+  const [deletedSlideIds, setDeletedSlideIds] = useState<string[]>([]);
+
+  const publishedSlides = useMemo(
+    () => data.quickPosts.filter((q) => !deletedSlideIds.includes(q.id)),
+    [data.quickPosts, deletedSlideIds]
+  );
+
+  const filteredPublished = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return publishedSlides;
+    return publishedSlides.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.templateType.toLowerCase().includes(q)
+    );
+  }, [publishedSlides, search]);
+
+  async function handleDeletePublished(qp: QuickPostItem) {
+    const ok = await confirm({
+      title: `Delete published slide "${qp.title}"?`,
+      description:
+        "This archives the studio slide and removes it from future playlist loops.",
+      confirmLabel: "Delete Slide",
+      variant: "danger",
+    });
+    if (!ok) return;
+    setDeletedSlideIds((prev) => [...prev, qp.id]);
+    const res = await fetch(`/api/quick-posts/${qp.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      setDeletedSlideIds((prev) => prev.filter((id) => id !== qp.id));
+      toast.error("Could not delete slide");
+      return;
+    }
+    toast.success(`Deleted "${qp.title}"`);
+    void onRefresh?.();
+  }
 
   const customList = useMemo(
     () => data.customTemplates ?? [],
@@ -83,18 +128,43 @@ export function TemplatesTab({
       {/* Unified Header Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="relative w-64">
+          <div className="inline-flex rounded-lg border border-zinc-200 bg-zinc-50 p-1">
+            <button
+              type="button"
+              onClick={() => setViewMode("templates")}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                viewMode === "templates"
+                  ? "bg-white text-zinc-950 shadow-2xs ring-1 ring-zinc-200/80"
+                  : "text-zinc-500 hover:text-zinc-900"
+              }`}
+            >
+              Design Templates ({BUILT_IN_STUDIO_TEMPLATES.length + customList.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("published")}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                viewMode === "published"
+                  ? "bg-white text-zinc-950 shadow-2xs ring-1 ring-zinc-200/80"
+                  : "text-zinc-500 hover:text-zinc-900"
+              }`}
+            >
+              Published Studio Slides ({publishedSlides.length})
+            </button>
+          </div>
+          <div className="relative w-60">
             <Search className="pointer-events-none absolute left-2.5 top-2.5 size-3.5 text-zinc-400" />
             <Input
               className="h-8 pl-8 text-xs"
-              placeholder="Search 16+ industry & dept templates..."
+              placeholder={
+                viewMode === "published"
+                  ? "Search published slides..."
+                  : "Search 16+ industry & dept templates..."
+              }
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <Badge variant="purple">
-            {BUILT_IN_STUDIO_TEMPLATES.length + customList.length} Templates
-          </Badge>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -117,6 +187,77 @@ export function TemplatesTab({
         </div>
       </div>
 
+      {/* PUBLISHED STUDIO SLIDES GALLERY */}
+      {viewMode === "published" ? (
+        filteredPublished.length === 0 ? (
+          <Card>
+            <CardContent className="p-12 text-center text-sm text-zinc-500">
+              No published Studio slides found. Switch to{" "}
+              <strong>Design Templates</strong>, click{" "}
+              <strong>Customize in Studio</strong>, and click{" "}
+              <strong>Save &amp; Push</strong> to publish slides into your playlists.
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+            {filteredPublished.map((qp) => (
+              <Card
+                key={qp.id}
+                className="flex flex-col overflow-hidden transition hover:border-zinc-400 hover:shadow-sm"
+              >
+                <div className="pointer-events-none aspect-video w-full overflow-hidden border-b border-zinc-200 bg-zinc-950">
+                  {qp.slideConfig.canvasDoc ? (
+                    <CanvasRenderer doc={qp.slideConfig.canvasDoc} />
+                  ) : (
+                    <QuickPostSlide
+                      title={qp.title}
+                      departmentName={qp.departmentName ?? "Studio"}
+                      templateType={qp.templateType}
+                      config={qp.slideConfig}
+                    />
+                  )}
+                </div>
+                <CardContent className="flex flex-1 flex-col justify-between gap-3 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="mb-1 flex items-center gap-1.5">
+                        <Badge variant="purple">
+                          {qp.slideConfig.canvasDoc ? "Canvas Slide" : "Live KPI"}
+                        </Badge>
+                        <span className="font-mono text-[10px] text-zinc-400">
+                          {qp.durationSeconds}s
+                        </span>
+                      </div>
+                      <p className="truncate text-sm font-semibold text-zinc-950">
+                        {qp.title}
+                      </p>
+                    </div>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      title="Delete published slide"
+                      onClick={() => void handleDeletePublished(qp)}
+                    >
+                      <Trash2 className="size-3.5 text-rose-500" />
+                    </Button>
+                  </div>
+                  {onEditPublishedSlide && (
+                    <Button
+                      size="sm"
+                      className="w-full"
+                      onClick={() => onEditPublishedSlide(qp)}
+                    >
+                      <Edit3 className="size-3.5" />
+                      Edit in Crown Studio
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )
+      ) : (
+        <>
       {/* Category Filter Pills */}
       <div className="flex flex-wrap items-center gap-2">
         {(
@@ -251,6 +392,8 @@ export function TemplatesTab({
             </Card>
           ))}
         </div>
+      )}
+        </>
       )}
     </div>
   );

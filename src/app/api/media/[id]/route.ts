@@ -55,24 +55,25 @@ export async function DELETE(
     )
     .limit(1);
 
-  const storageResult =
+  const [storageResult] = await Promise.all([
     otherRefs.length === 0
-      ? await purgeMediaObject(existing.storagePath, existing.publicUrl)
-      : { purged: false, reason: "Shared by another deduplicated asset" };
-
-  await Promise.all([
+      ? purgeMediaObject(existing.storagePath, existing.publicUrl)
+      : Promise.resolve({
+          purged: false,
+          reason: "Shared by another deduplicated asset",
+        }),
     broadcastFleetSignal("manifest_refresh", {
       mediaAssetId: id,
       reason: "media_archived",
     }),
     recordAuditLog({
-      action: storageResult.purged ? "media.purged" : "media.archived",
+      action: otherRefs.length === 0 ? "media.purged" : "media.archived",
       entityType: "media_asset",
       entityId: id,
       userId: session.userId,
       metadata: {
         title: archived.title,
-        freedBytes: storageResult.purged ? existing.fileSizeBytes : 0,
+        freedBytes: otherRefs.length === 0 ? existing.fileSizeBytes : 0,
       },
     }),
   ]);

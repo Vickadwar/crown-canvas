@@ -380,6 +380,13 @@ export async function GET(request: Request) {
         id: screen.id,
         name: screen.name,
         orientation: screen.orientation,
+        displayMode:
+          typeof (screen.metadata as Record<string, unknown> | null)?.displayMode ===
+          "string"
+            ? String((screen.metadata as Record<string, unknown>).displayMode)
+            : screen.orientation === "portrait"
+              ? "portrait_9_16"
+              : "landscape_16_9",
         screenRole: screen.screenRole,
         hardwareType: screen.hardwareType,
         isActive: screen.isActive,

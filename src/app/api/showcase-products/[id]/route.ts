@@ -137,13 +137,12 @@ export async function DELETE(
       return Response.json({ error: "Product not found" }, { status: 404 });
     }
 
-    if (deleted.storagePath) {
-      await purgeMediaObject(deleted.storagePath, deleted.imageUrl).catch(
-        () => undefined
-      );
-    }
-
     await Promise.all([
+      deleted.storagePath
+        ? purgeMediaObject(deleted.storagePath, deleted.imageUrl).catch(
+            () => undefined
+          )
+        : Promise.resolve(),
       broadcastFleetSignal("manifest_refresh", {
         reason: "showcase_product_deleted",
         productId: id,

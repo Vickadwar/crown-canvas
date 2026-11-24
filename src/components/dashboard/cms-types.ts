@@ -87,6 +87,7 @@ export interface ScreenItem {
   lastSnapshotUrl?: string | null;
   lastSnapshotAt?: string | null;
   lastHeartbeatAt: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface MediaAssetItem {
@@ -364,6 +365,16 @@ export interface ExecutiveReportPayload {
   storageStats: StorageStats;
 }
 
+export interface AppLicenseInfo {
+  mode: "trial" | "oem_lifetime";
+  statusLabel: string;
+  maskedKey: string;
+  fullKey: string | null;
+  activatedAt: string | null;
+  activatedByName: string | null;
+  singleInstanceNotice: string;
+}
+
 export interface OverviewPayload {
   configured: boolean;
   storageReady: boolean;
@@ -372,6 +383,7 @@ export interface OverviewPayload {
   pendingApprovalsCount?: number;
   storageStats?: StorageStats;
   authPolicy?: PasswordPolicyConfig;
+  appLicense?: AppLicenseInfo;
   roles?: RoleItem[];
   countries: CountryItem[];
   branches: BranchItem[];

@@ -42,43 +42,17 @@ export async function ensureShowcaseProducts() {
     }));
   }
 
+  // Read-only query: never auto-reseed on concurrent requests (prevents duplicate
+  // inserts and respects intentional admin deletions of showcase products).
   try {
-    return await withDbRetry(async () => {
-      const rows = await db
+    return await withDbRetry(() =>
+      db
         .select()
         .from(showcaseProducts)
-        .orderBy(asc(showcaseProducts.sortOrder), asc(showcaseProducts.createdAt));
-
-      if (rows.length > 0) return rows;
-
-      await db.insert(showcaseProducts).values(
-        CROWN_PRODUCT_SHOWCASE.map((p, idx) => ({
-          name: p.name,
-          badgeHeader: p.category,
-          description: p.tagline,
-          imageUrl: p.imageUrl,
-          storagePath: null,
-          sortOrder: idx,
-          isActive: true,
-        }))
-      );
-
-      return await db
-        .select()
-        .from(showcaseProducts)
-        .orderBy(asc(showcaseProducts.sortOrder), asc(showcaseProducts.createdAt));
-    });
+        .orderBy(asc(showcaseProducts.sortOrder), asc(showcaseProducts.createdAt))
+    );
   } catch {
-    return CROWN_PRODUCT_SHOWCASE.map((p, idx) => ({
-      id: p.id,
-      name: p.name,
-      badgeHeader: p.category,
-      description: p.tagline,
-      imageUrl: p.imageUrl,
-      storagePath: null,
-      sortOrder: idx,
-      isActive: true,
-    }));
+    return [];
   }
 }
 

@@ -70,9 +70,8 @@ import {
   createBlankCanvasDoc,
 } from "@/lib/studio-templates";
 import {
-  CROWN_CAMPAIGN_BANNERS,
   CROWN_DECORATIVE_QR_URL,
-  CROWN_PRODUCT_SHOWCASE,
+  type CrownProductItem,
 } from "@/lib/crown-products";
 import {
   CanvasRenderer,
@@ -123,6 +122,7 @@ interface CanvasEditorProps {
     category: string;
     imageUrl: string;
   }>;
+  showcaseProducts?: CrownProductItem[];
   onRefreshBackgrounds?: () => Promise<void>;
   isEditingExisting: boolean;
   savingSlide: boolean;
@@ -167,6 +167,7 @@ export function CanvasEditor({
   mediaImages,
   customTemplates,
   customBackgrounds = [],
+  showcaseProducts = [],
   onRefreshBackgrounds,
   isEditingExisting,
   savingSlide,
@@ -1439,78 +1440,92 @@ export function CanvasEditor({
 
                 <div className="space-y-1.5 border-t pt-2.5">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
-                    Crown Product Packshots ({CROWN_PRODUCT_SHOWCASE.length})
+                    Product Packshots ({showcaseProducts.length})
                   </p>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {CROWN_PRODUCT_SHOWCASE.map((prod) => (
-                      <button
-                        key={prod.id}
-                        type="button"
-                        onClick={() =>
-                          addElement({
-                            type: "image",
-                            label: prod.name,
-                            x: 64,
-                            y: 22,
-                            w: 26,
-                            h: 50,
-                            imageUrl: prod.imageUrl,
-                            objectFit: "contain",
-                            borderRadius: 0,
-                          })
-                        }
-                        className="overflow-hidden rounded-lg border border-zinc-200 bg-white text-left transition hover:border-zinc-950 dark:border-zinc-800 dark:bg-zinc-900"
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={prod.imageUrl}
-                          alt={prod.name}
-                          className="h-14 w-full bg-zinc-50 p-1 object-contain dark:bg-zinc-900"
-                        />
-                        <p className="truncate px-1.5 py-1 text-[10px] font-medium">
-                          {prod.name}
-                        </p>
-                      </button>
-                    ))}
-                  </div>
+                  {showcaseProducts.length === 0 ? (
+                    <p className="text-[10px] text-zinc-400">
+                      Add products under Playlists → Showcase Products to insert them here.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {showcaseProducts.map((prod) => (
+                        <button
+                          key={prod.id}
+                          type="button"
+                          onClick={() =>
+                            addElement({
+                              type: "image",
+                              label: prod.name,
+                              x: 64,
+                              y: 22,
+                              w: 26,
+                              h: 50,
+                              imageUrl: prod.imageUrl,
+                              objectFit: "contain",
+                              borderRadius: 0,
+                            })
+                          }
+                          className="overflow-hidden rounded-lg border border-zinc-200 bg-white text-left transition hover:border-zinc-950 dark:border-zinc-800 dark:bg-zinc-900"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={prod.imageUrl}
+                            alt={prod.name}
+                            loading="lazy"
+                            className="h-14 w-full bg-zinc-50 p-1 object-contain dark:bg-zinc-900"
+                          />
+                          <p className="truncate px-1.5 py-1 text-[10px] font-medium">
+                            {prod.name}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-1.5 border-t pt-2.5">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
-                    Crown Campaign Banners ({CROWN_CAMPAIGN_BANNERS.length})
+                    Campaign Banners ({customBackgrounds.length})
                   </p>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {CROWN_CAMPAIGN_BANNERS.map((banner) => (
-                      <button
-                        key={banner.id}
-                        type="button"
-                        onClick={() =>
-                          addElement({
-                            type: "image",
-                            label: banner.name,
-                            x: 5,
-                            y: 12,
-                            w: 90,
-                            h: 76,
-                            imageUrl: banner.imageUrl,
-                            objectFit: "cover",
-                            borderRadius: 16,
-                          })
-                        }
-                        className="overflow-hidden rounded-lg border border-zinc-200 bg-white text-left transition hover:border-zinc-950 dark:border-zinc-800 dark:bg-zinc-900"
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={banner.imageUrl}
-                          alt={banner.name}
-                          className="h-14 w-full bg-zinc-100 object-cover"
-                        />
-                        <p className="truncate px-1.5 py-1 text-[10px] font-medium">
-                          {banner.name}
-                        </p>
-                      </button>
-                    ))}
-                  </div>
+                  {customBackgrounds.length === 0 ? (
+                    <p className="text-[10px] text-zinc-400">
+                      Upload banners in the Background tab using &ldquo;Add BG&rdquo;.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {customBackgrounds.map((banner) => (
+                        <button
+                          key={banner.id}
+                          type="button"
+                          onClick={() =>
+                            addElement({
+                              type: "image",
+                              label: banner.name,
+                              x: 5,
+                              y: 12,
+                              w: 90,
+                              h: 76,
+                              imageUrl: banner.imageUrl,
+                              objectFit: "cover",
+                              borderRadius: 16,
+                            })
+                          }
+                          className="overflow-hidden rounded-lg border border-zinc-200 bg-white text-left transition hover:border-zinc-950 dark:border-zinc-800 dark:bg-zinc-900"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={banner.imageUrl}
+                            alt={banner.name}
+                            loading="lazy"
+                            className="h-14 w-full bg-zinc-100 object-cover"
+                          />
+                          <p className="truncate px-1.5 py-1 text-[10px] font-medium">
+                            {banner.name}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {mediaImages.length > 0 && (
@@ -1622,7 +1637,7 @@ export function CanvasEditor({
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-1">
                     <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
-                      Canvas Backgrounds ({CROWN_CAMPAIGN_BANNERS.length + customBackgrounds.length})
+                      Canvas Backgrounds ({customBackgrounds.length})
                     </p>
                     <div className="flex items-center gap-2">
                       {doc.backgroundImageUrl && (
@@ -1774,33 +1789,12 @@ export function CanvasEditor({
                         </button>
                       </div>
                     ))}
-                    {CROWN_CAMPAIGN_BANNERS.map((banner) => (
-                      <button
-                        key={banner.id}
-                        type="button"
-                        onClick={() =>
-                          commitDoc({
-                            ...doc,
-                            backgroundImageUrl: banner.imageUrl,
-                          })
-                        }
-                        className={`overflow-hidden rounded-lg border text-left transition ${doc.backgroundImageUrl === banner.imageUrl
-                            ? "border-zinc-950 ring-2 ring-zinc-950/20"
-                            : "border-zinc-200 hover:border-zinc-400 dark:border-zinc-800"
-                          }`}
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={banner.imageUrl}
-                          alt={banner.name}
-                          className="h-12 w-full bg-zinc-100 object-cover"
-                        />
-                        <p className="truncate px-1.5 py-1 text-[10px] font-semibold">
-                          {banner.name}
-                        </p>
-                      </button>
-                    ))}
                   </div>
+                  {customBackgrounds.length === 0 && (
+                    <p className="text-[10px] text-zinc-400">
+                      No uploaded backgrounds yet — click &ldquo;Add BG&rdquo; above to add campaign banners to Cloudflare R2.
+                    </p>
+                  )}
                 </div>
 
                 {mediaImages.length > 0 && (

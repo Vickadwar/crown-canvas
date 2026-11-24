@@ -88,6 +88,7 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [addMode, setAddMode] = useState<"upload" | "url">("upload");
   const [previewVideo, setPreviewVideo] = useState<MediaAssetItem | null>(null);
+  const [optimisticDeletedIds, setOptimisticDeletedIds] = useState<string[]>([]);
 
   // Upload & GPU Video Compression state
   const [title, setTitle] = useState("");
@@ -141,6 +142,7 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
   const filteredAssets = useMemo(() => {
     const q = search.trim().toLowerCase();
     return data.mediaAssets.filter((asset) => {
+      if (optimisticDeletedIds.includes(asset.id)) return false;
       if (typeFilter === "video" && asset.mediaType !== "video") return false;
       if (typeFilter === "image" && asset.mediaType !== "image") return false;
       if (
@@ -154,7 +156,7 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
       if (!q) return true;
       return asset.title.toLowerCase().includes(q);
     });
-  }, [data.mediaAssets, search, typeFilter, deptFilter]);
+  }, [data.mediaAssets, optimisticDeletedIds, search, typeFilter, deptFilter]);
 
   async function appendAssetToPlaylists(
     assetId: string,
@@ -496,13 +498,18 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
       variant: "danger",
     });
     if (!ok) return;
+    // Instant optimistic removal (< 50ms UI feedback)
+    setOptimisticDeletedIds((prev) => [...prev, asset.id]);
     const res = await fetch(`/api/media/${asset.id}`, { method: "DELETE" });
     if (!res.ok) {
+      setOptimisticDeletedIds((prev) => prev.filter((id) => id !== asset.id));
       toast.error("Failed to delete asset");
       return;
     }
     toast.success(`Deleted "${asset.title}"`);
-    await onRefresh();
+    void onRefresh().finally(() => {
+      setOptimisticDeletedIds((prev) => prev.filter((id) => id !== asset.id));
+    });
   }
 
   const usedMb = ((data.storageStats?.totalBytesUsed ?? 0) / (1024 * 1024)).toFixed(1);

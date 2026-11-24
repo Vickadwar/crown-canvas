@@ -102,6 +102,7 @@ interface PlayerManifest {
     id: string;
     name: string;
     orientation: "landscape" | "portrait";
+    displayMode?: string;
     screenRole: string;
     hardwareType: string;
   };
@@ -1617,12 +1618,43 @@ export function PlayerClient() {
     nextItem.mediaType === "video" &&
     Boolean(nextPlaybackUrl);
 
-  const hasMultiZoneLayout = demoMode
-    ? demoSplitView
-    : Boolean(
-      manifest?.layout?.zonesConfig &&
-      manifest.layout.zonesConfig.length > 1
-    );
+  const zones = manifest?.layout?.zonesConfig ?? [];
+  const sidebarZone = zones.find(
+    (z) => z.role === "sidebar" || z.role === "qr_promo" || z.role === "weather_clock"
+  );
+  const hasSidebarZone = demoMode ? demoSplitView : Boolean(sidebarZone);
+  const sidebarSide: "left" | "right" =
+    sidebarZone && sidebarZone.xPercent === 0 ? "left" : "right";
+  const hasTickerOnlyLayout =
+    !hasSidebarZone &&
+    (zones.some((z) => z.role === "ticker") ||
+      Boolean(
+        manifest?.playlist?.tickerText &&
+        manifest.playlist.tickerText.trim().length > 0
+      ));
+  const hasMultiZoneLayout = hasSidebarZone;
+
+  const displayMode = manifest?.screen?.displayMode ?? "";
+  const rotationStyle: React.CSSProperties | undefined =
+    displayMode === "portrait_rotate_90"
+      ? {
+        position: "fixed",
+        top: "50%",
+        left: "50%",
+        width: "100vh",
+        height: "100vw",
+        transform: "translate(-50%, -50%) rotate(90deg)",
+      }
+      : displayMode === "portrait_rotate_270"
+        ? {
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          width: "100vh",
+          height: "100vw",
+          transform: "translate(-50%, -50%) rotate(-90deg)",
+        }
+        : undefined;
 
   const mainStageContent = !currentItem ? (
     <div className="flex h-full w-full flex-col items-center justify-center bg-[#060d1f] p-12 text-center">
@@ -1755,6 +1787,7 @@ export function PlayerClient() {
   return (
     <div
       ref={playerContainerRef}
+      style={rotationStyle}
       className={`relative h-screen w-screen overflow-hidden bg-black text-white select-none ${cursorHidden ? "player-cursor-hidden" : ""
         }`}
     >
@@ -1781,6 +1814,7 @@ export function PlayerClient() {
           currencyCode={manifest?.country?.currencyCode || "KES"}
           clockText={clockText}
           orientation={manifest?.screen?.orientation ?? "landscape"}
+          sidebarSide={sidebarSide}
           sidebarConfig={manifest?.playlist?.sidebarConfig ?? null}
           sidebarProfile={manifest?.sidebarProfile ?? null}
           showcaseProducts={manifest?.showcaseProducts}
@@ -1794,13 +1828,12 @@ export function PlayerClient() {
         >
           {mainStageContent}
         </MultiZoneFrame>
-      ) : manifest?.playlist?.tickerText &&
-        manifest.playlist.tickerText.trim().length > 0 ? (
-        <div className="flex h-screen w-screen flex-col overflow-hidden bg-black">
+      ) : hasTickerOnlyLayout ? (
+        <div className="flex h-full w-full flex-col overflow-hidden bg-black">
           <div className="relative min-h-0 flex-1 overflow-hidden">
             {mainStageContent}
           </div>
-          <TickerBar messages={manifest.tickerMessages ?? []} />
+          <TickerBar messages={manifest?.tickerMessages ?? []} />
         </div>
       ) : (
         mainStageContent
@@ -1840,8 +1873,8 @@ export function PlayerClient() {
       >
         <div
           className={`flex items-center gap-2 rounded-full border border-white/15 bg-black/80 px-3.5 py-1.5 text-[11px] font-medium text-white/95 shadow-2xl backdrop-blur-md transition-all duration-200 ${remoteHudVisible
-              ? "pointer-events-auto translate-y-0 opacity-100"
-              : "pointer-events-none translate-y-1 opacity-0 group-hover/hud:pointer-events-auto group-hover/hud:translate-y-0 group-hover/hud:opacity-100 focus-within:pointer-events-auto focus-within:translate-y-0 focus-within:opacity-100"
+            ? "pointer-events-auto translate-y-0 opacity-100"
+            : "pointer-events-none translate-y-1 opacity-0 group-hover/hud:pointer-events-auto group-hover/hud:translate-y-0 group-hover/hud:opacity-100 focus-within:pointer-events-auto focus-within:translate-y-0 focus-within:opacity-100"
             }`}
         >
           {isOnline ? (

@@ -320,6 +320,15 @@ export function StudioTab({
             }))}
           customTemplates={data.customTemplates ?? []}
           customBackgrounds={data.studioBackgrounds ?? []}
+          showcaseProducts={(data.showcaseProducts ?? [])
+            .filter((p) => p.isActive)
+            .map((p) => ({
+              id: p.id,
+              name: p.name,
+              category: p.badgeHeader,
+              tagline: p.description,
+              imageUrl: p.imageUrl,
+            }))}
           onRefreshBackgrounds={onRefresh}
           isEditingExisting={Boolean(editingQuickPostId)}
           savingSlide={savingStudio}

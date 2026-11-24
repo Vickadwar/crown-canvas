@@ -672,7 +672,24 @@ export function ShowcaseProductsPanel({
   onRefresh: () => Promise<void>;
 }) {
   const confirm = useConfirm();
-  const products = useMemo(() => data.showcaseProducts ?? [], [data.showcaseProducts]);
+  const baseProducts = useMemo(() => data.showcaseProducts ?? [], [data.showcaseProducts]);
+  const [optimisticDeleted, setOptimisticDeleted] = useState<string[]>([]);
+  const [optimisticActive, setOptimisticActive] = useState<Record<string, boolean>>({});
+  const [optimisticOrder, setOptimisticOrder] = useState<string[] | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const products = useMemo(() => {
+    const filtered = baseProducts
+      .filter((p) => !optimisticDeleted.includes(p.id))
+      .map((p) =>
+        p.id in optimisticActive ? { ...p, isActive: optimisticActive[p.id] } : p
+      );
+    if (!optimisticOrder) return filtered;
+    const rank = new Map(optimisticOrder.map((id, i) => [id, i]));
+    return [...filtered].sort(
+      (a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999)
+    );
+  }, [baseProducts, optimisticDeleted, optimisticActive, optimisticOrder]);
 
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<ShowcaseProductItem | null>(null);
@@ -762,17 +779,38 @@ export function ShowcaseProductsPanel({
   }
 
   async function handleToggleActive(p: ShowcaseProductItem) {
-    const res = await fetch(`/api/showcase-products/${p.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ isActive: !p.isActive }),
-    });
-    if (!res.ok) {
-      toast.error("Failed to update product visibility");
-      return;
+    const nextActive = !p.isActive;
+    // Instant optimistic toggle (< 50ms UI response)
+    setOptimisticActive((prev) => ({ ...prev, [p.id]: nextActive }));
+    setBusyId(p.id);
+    try {
+      const res = await fetch(`/api/showcase-products/${p.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: nextActive }),
+      });
+      if (!res.ok) {
+        setOptimisticActive((prev) => {
+          const copy = { ...prev };
+          delete copy[p.id];
+          return copy;
+        });
+        toast.error("Failed to update product visibility");
+        return;
+      }
+      toast.success(
+        nextActive ? `Activated "${p.name}"` : `Hidden "${p.name}" from TVs`
+      );
+      void onRefresh().finally(() => {
+        setOptimisticActive((prev) => {
+          const copy = { ...prev };
+          delete copy[p.id];
+          return copy;
+        });
+      });
+    } finally {
+      setBusyId(null);
     }
-    toast.success(p.isActive ? `Hidden "${p.name}" from TVs` : `Activated "${p.name}"`);
-    await onRefresh();
   }
 
   async function handleReorder(idx: number, delta: -1 | 1) {
@@ -780,19 +818,32 @@ export function ShowcaseProductsPanel({
     if (target < 0 || target >= products.length) return;
     const a = products[idx];
     const b = products[target];
-    await Promise.all([
-      fetch(`/api/showcase-products/${a.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sortOrder: target }),
-      }),
-      fetch(`/api/showcase-products/${b.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sortOrder: idx }),
-      }),
-    ]);
-    await onRefresh();
+    const nextIds = products.map((item) => item.id);
+    [nextIds[idx], nextIds[target]] = [nextIds[target], nextIds[idx]];
+    setOptimisticOrder(nextIds);
+    setBusyId(a.id);
+    try {
+      const [r1, r2] = await Promise.all([
+        fetch(`/api/showcase-products/${a.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sortOrder: target }),
+        }),
+        fetch(`/api/showcase-products/${b.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sortOrder: idx }),
+        }),
+      ]);
+      if (!r1.ok || !r2.ok) {
+        setOptimisticOrder(null);
+        toast.error("Failed to reorder product");
+        return;
+      }
+      void onRefresh().finally(() => setOptimisticOrder(null));
+    } finally {
+      setBusyId(null);
+    }
   }
 
   async function handleDelete(p: ShowcaseProductItem) {
@@ -804,15 +855,25 @@ export function ShowcaseProductsPanel({
       variant: "danger",
     });
     if (!ok) return;
-    const res = await fetch(`/api/showcase-products/${p.id}`, {
-      method: "DELETE",
-    });
-    if (!res.ok) {
-      toast.error("Failed to delete product");
-      return;
+    // Instant optimistic removal (< 50ms UI response)
+    setOptimisticDeleted((prev) => [...prev, p.id]);
+    setBusyId(p.id);
+    try {
+      const res = await fetch(`/api/showcase-products/${p.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        setOptimisticDeleted((prev) => prev.filter((id) => id !== p.id));
+        toast.error("Failed to delete product");
+        return;
+      }
+      toast.success(`Deleted "${p.name}"`);
+      void onRefresh().finally(() => {
+        setOptimisticDeleted((prev) => prev.filter((id) => id !== p.id));
+      });
+    } finally {
+      setBusyId(null);
     }
-    toast.success(`Deleted "${p.name}"`);
-    await onRefresh();
   }
 
   return (
@@ -970,12 +1031,13 @@ export function ShowcaseProductsPanel({
       <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {products.map((prod, idx) => {
           const isRealUuid = /^[0-9a-f-]{36}$/i.test(prod.id);
+          const isBusy = busyId === prod.id;
           return (
             <Card
               key={prod.id}
-              className={`flex flex-col border-zinc-200 bg-white ${
+              className={`flex flex-col border-zinc-200 bg-white transition ${
                 !prod.isActive ? "opacity-60" : ""
-              }`}
+              } ${isBusy ? "pointer-events-none opacity-70" : ""}`}
             >
               <CardContent className="flex flex-1 flex-col justify-between gap-3 p-3.5">
                 <div>

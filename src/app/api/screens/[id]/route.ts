@@ -11,6 +11,15 @@ const patchScreenSchema = z.object({
   departmentId: z.string().uuid().nullable().optional(),
   groupId: z.string().uuid().nullable().optional(),
   orientation: z.enum(["landscape", "portrait"]).optional(),
+  displayMode: z
+    .enum([
+      "landscape_16_9",
+      "portrait_9_16",
+      "portrait_rotate_90",
+      "portrait_rotate_270",
+      "ultrawide_21_9",
+    ])
+    .optional(),
   name: z.string().min(2).max(150).optional(),
   isActive: z.boolean().optional(),
   screenRole: z
@@ -53,9 +62,32 @@ export async function PATCH(
       );
     }
 
+    const { displayMode, ...restFields } = parsed.data;
+    let nextMetadata: Record<string, unknown> | undefined;
+    let nextOrientation = restFields.orientation;
+    if (displayMode) {
+      const [current] = await db
+        .select({ metadata: screens.metadata })
+        .from(screens)
+        .where(eq(screens.id, id))
+        .limit(1);
+      nextMetadata = {
+        ...(current?.metadata ?? {}),
+        displayMode,
+      };
+      nextOrientation = displayMode.startsWith("portrait")
+        ? "portrait"
+        : "landscape";
+    }
+
     const [updated] = await db
       .update(screens)
-      .set({ ...parsed.data, updatedAt: new Date() })
+      .set({
+        ...restFields,
+        ...(nextOrientation ? { orientation: nextOrientation } : {}),
+        ...(nextMetadata ? { metadata: nextMetadata } : {}),
+        updatedAt: new Date(),
+      })
       .where(eq(screens.id, id))
       .returning();
 

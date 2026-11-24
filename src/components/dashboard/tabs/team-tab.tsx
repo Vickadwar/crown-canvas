@@ -12,11 +12,15 @@
 
 import { useMemo, useState } from "react";
 import {
+  Award,
   Check,
   Clock,
   Copy,
   Edit3,
+  Eye,
+  EyeOff,
   KeyRound,
+  Lock,
   PauseCircle,
   PlayCircle,
   Plus,
@@ -94,7 +98,34 @@ const EXPIRY_PRESETS = [
 
 export function TeamTab({ data, onRefresh }: TeamTabProps) {
   const confirm = useConfirm();
-  const [subTab, setSubTab] = useState<"users" | "roles" | "policy">("users");
+  const isSuperAdmin = Boolean(
+    !data.session?.enforceAuth ||
+      (data.session?.scopes ?? []).some((s) => s.role === "super_admin")
+  );
+  const [subTab, setSubTab] = useState<
+    "users" | "roles" | "policy" | "license"
+  >("users");
+
+  // ── 4. Application Authentication (Cloudflare / OEM Licensing) State ─────
+  const [licenseState, setLicenseState] = useState(
+    data.appLicense ?? {
+      mode: "trial" as const,
+      statusLabel: "Trial Key Active",
+      maskedKey: "CCTRI-••••-••••-••••-••••-RIAL",
+      fullKey: null,
+      activatedAt: null,
+      activatedByName: null,
+      singleInstanceNotice:
+        "Licensed for single-instance deployment — you can use this activation key on one application instance at a time.",
+    }
+  );
+  const [changingLicense, setChangingLicense] = useState(false);
+  const [selectedLicenseMode, setSelectedLicenseMode] = useState<
+    "trial" | "oem_lifetime"
+  >(licenseState.mode);
+  const [oemKeyInput, setOemKeyInput] = useState("");
+  const [showFullLicenseKey, setShowFullLicenseKey] = useState(false);
+  const [savingLicense, setSavingLicense] = useState(false);
 
   // Shared lookup maps
   const countryById = useMemo(
@@ -536,26 +567,80 @@ export function TeamTab({ data, onRefresh }: TeamTabProps) {
     }
   }
 
+  async function handleSaveLicense(e: React.FormEvent) {
+    e.preventDefault();
+    if (!isSuperAdmin) return;
+    if (selectedLicenseMode === "oem_lifetime") {
+      const cleaned = oemKeyInput.replace(/[^a-zA-Z0-9]/g, "");
+      if (cleaned.length !== 32) {
+        toast.error(
+          `OEM activation key must be 32 characters (currently ${cleaned.length}).`
+        );
+        return;
+      }
+    }
+    setSavingLicense(true);
+    try {
+      const res = await fetch("/api/auth/license", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: selectedLicenseMode,
+          licenseKey:
+            selectedLicenseMode === "oem_lifetime" ? oemKeyInput.trim() : undefined,
+        }),
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        license?: typeof licenseState;
+      };
+      if (!res.ok || !json.license) {
+        toast.error(json.error || "License activation failed");
+        return;
+      }
+      setLicenseState(json.license);
+      setChangingLicense(false);
+      setOemKeyInput("");
+      toast.success(
+        json.license.mode === "oem_lifetime"
+          ? "OEM Key verified — Lifetime Access Activated!"
+          : "Switched application license to Trial Key"
+      );
+      void onRefresh();
+    } finally {
+      setSavingLicense(false);
+    }
+  }
+
   return (
     <div className="space-y-5">
       {/* Sub-Navigation Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white p-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <div className="inline-flex rounded-lg border border-zinc-200 bg-zinc-50 p-1">
+        <div className="inline-flex flex-wrap rounded-lg border border-zinc-200 bg-zinc-50 p-1">
           {[
             {
               id: "users" as const,
               label: `Users & Access (${data.teamUsers.length})`,
               icon: Users,
+              locked: false,
             },
             {
               id: "roles" as const,
               label: `Roles & Permissions (${rolesList.length})`,
               icon: Shield,
+              locked: false,
             },
             {
               id: "policy" as const,
               label: "Password Policy",
               icon: SlidersHorizontal,
+              locked: false,
+            },
+            {
+              id: "license" as const,
+              label: "Application Authentication",
+              icon: isSuperAdmin ? Award : Lock,
+              locked: !isSuperAdmin,
             },
           ].map((tab) => {
             const Icon = tab.icon;
@@ -564,11 +649,21 @@ export function TeamTab({ data, onRefresh }: TeamTabProps) {
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setSubTab(tab.id)}
+                disabled={tab.locked}
+                title={
+                  tab.locked
+                    ? "Restricted to Super Administrators only"
+                    : tab.label
+                }
+                onClick={() => {
+                  if (!tab.locked) setSubTab(tab.id);
+                }}
                 className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${
-                  active
-                    ? "bg-white text-zinc-950 shadow-2xs ring-1 ring-zinc-200/80"
-                    : "text-zinc-500 hover:text-zinc-900"
+                  tab.locked
+                    ? "cursor-not-allowed text-zinc-400 opacity-60"
+                    : active
+                      ? "bg-white text-zinc-950 shadow-2xs ring-1 ring-zinc-200/80"
+                      : "text-zinc-500 hover:text-zinc-900"
                 }`}
               >
                 <Icon className="size-3.5" />
@@ -1458,6 +1553,279 @@ export function TeamTab({ data, onRefresh }: TeamTabProps) {
                   Users can update their password anytime from <strong>My Account</strong> by
                   verifying their current password. Administrators can also issue a one-time
                   temporary reset password directly from <strong>Users &amp; Access</strong>.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* SUB-TAB 4: APPLICATION AUTHENTICATION (SUPER ADMIN ONLY)            */}
+      {/* =================================================================== */}
+      {subTab === "license" && (
+        <div className="grid gap-5 lg:grid-cols-12">
+          <Card className="border-zinc-200 bg-white lg:col-span-7">
+            <CardHeader className="flex flex-row items-start justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Award className="size-4 text-emerald-600" />
+                  Application Authentication &amp; Cloudflare Edge License
+                </CardTitle>
+                <CardDescription>
+                  Manage commercial activation for this Crown Canvas deployment.
+                  Only Super Administrators can view or change license keys.
+                </CardDescription>
+              </div>
+              <Badge
+                variant={
+                  licenseState.mode === "oem_lifetime" ? "success" : "warning"
+                }
+              >
+                {licenseState.mode === "oem_lifetime"
+                  ? "Lifetime Access"
+                  : "Trial License"}
+              </Badge>
+            </CardHeader>
+
+            <CardContent className="space-y-4">
+              {/* Active License Status Card */}
+              <div
+                className={`rounded-xl border p-4 ${
+                  licenseState.mode === "oem_lifetime"
+                    ? "border-emerald-200 bg-emerald-50/60"
+                    : "border-amber-200 bg-amber-50/50"
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                      Current Activation Status
+                    </p>
+                    <p className="flex items-center gap-2 text-base font-bold text-zinc-950">
+                      <ShieldCheck
+                        className={`size-5 ${
+                          licenseState.mode === "oem_lifetime"
+                            ? "text-emerald-600"
+                            : "text-amber-600"
+                        }`}
+                      />
+                      {licenseState.mode === "oem_lifetime"
+                        ? "Lifetime Activation Verified (OEM Key)"
+                        : "Trial Key Active — Evaluation Mode"}
+                    </p>
+                  </div>
+                  {isSuperAdmin && !changingLicense && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setSelectedLicenseMode(
+                          licenseState.mode === "oem_lifetime"
+                            ? "oem_lifetime"
+                            : "oem_lifetime"
+                        );
+                        setChangingLicense(true);
+                      }}
+                    >
+                      <KeyRound className="size-3.5" />
+                      Change License Key
+                    </Button>
+                  )}
+                </div>
+
+                {/* Masked / Super-Admin Revealable Key Row */}
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200/80 bg-white px-3.5 py-2.5">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                      Active Key ({licenseState.mode === "oem_lifetime" ? "32-Character OEM" : "Trial"})
+                    </p>
+                    <p className="mt-0.5 truncate font-mono text-xs font-semibold text-zinc-900">
+                      {isSuperAdmin && showFullLicenseKey && licenseState.fullKey
+                        ? licenseState.fullKey
+                        : licenseState.maskedKey}
+                    </p>
+                  </div>
+                  {isSuperAdmin && licenseState.fullKey && (
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => setShowFullLicenseKey((v) => !v)}
+                      >
+                        {showFullLicenseKey ? (
+                          <>
+                            <EyeOff className="size-3" />
+                            Hide
+                          </>
+                        ) : (
+                          <>
+                            <Eye className="size-3" />
+                            Reveal
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(
+                            licenseState.fullKey ?? ""
+                          );
+                          toast.success("Copied license key");
+                        }}
+                      >
+                        <Copy className="size-3" />
+                        Copy
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                {licenseState.activatedAt && (
+                  <p className="mt-2.5 text-[11px] text-zinc-600">
+                    Activated on{" "}
+                    <strong>
+                      {new Date(licenseState.activatedAt).toLocaleString()}
+                    </strong>
+                    {licenseState.activatedByName
+                      ? ` by ${licenseState.activatedByName}`
+                      : ""}
+                    .
+                  </p>
+                )}
+              </div>
+
+              {/* Super Admin License Change Form */}
+              {isSuperAdmin && changingLicense && (
+                <form
+                  onSubmit={handleSaveLicense}
+                  className="space-y-4 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-zinc-950">
+                      Select License Type &amp; Activation Key
+                    </p>
+                    <Button
+                      type="button"
+                      size="icon-xs"
+                      variant="ghost"
+                      onClick={() => setChangingLicense(false)}
+                    >
+                      <X className="size-3.5" />
+                    </Button>
+                  </div>
+
+                  <div className="grid gap-2.5 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedLicenseMode("trial")}
+                      className={`rounded-xl border p-3 text-left transition ${
+                        selectedLicenseMode === "trial"
+                          ? "border-zinc-950 bg-white ring-2 ring-zinc-950/10"
+                          : "border-zinc-200 bg-white/60 hover:border-zinc-300"
+                      }`}
+                    >
+                      <p className="text-xs font-semibold text-zinc-950">
+                        Trial Key
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-zinc-500">
+                        Standard evaluation key for staging &amp; pilot testing.
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedLicenseMode("oem_lifetime")}
+                      className={`rounded-xl border p-3 text-left transition ${
+                        selectedLicenseMode === "oem_lifetime"
+                          ? "border-emerald-600 bg-white ring-2 ring-emerald-500/20"
+                          : "border-zinc-200 bg-white/60 hover:border-zinc-300"
+                      }`}
+                    >
+                      <p className="text-xs font-semibold text-emerald-900">
+                        OEM Key (Lifetime Access)
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-zinc-500">
+                        Permanent 32-character commercial enterprise license key.
+                      </p>
+                    </button>
+                  </div>
+
+                  {selectedLicenseMode === "oem_lifetime" && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">
+                        Enter 32-Character OEM Activation Key
+                      </Label>
+                      <Input
+                        className="h-9 font-mono text-xs uppercase tracking-wider"
+                        placeholder="CCOEM-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"
+                        value={oemKeyInput}
+                        onChange={(e) => setOemKeyInput(e.target.value)}
+                        required
+                      />
+                      <p className="text-[11px] text-zinc-500">
+                        Accepts 32 alphanumeric characters (with or without dashes).{" "}
+                        <span className="font-mono font-semibold text-zinc-700">
+                          {oemKeyInput.replace(/[^a-zA-Z0-9]/g, "").length}/32
+                        </span>
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2 border-t border-zinc-200 pt-3">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setChangingLicense(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button type="submit" size="sm" disabled={savingLicense}>
+                      <ShieldCheck className="size-3.5" />
+                      {savingLicense
+                        ? "Verifying Key..."
+                        : selectedLicenseMode === "oem_lifetime"
+                          ? "Activate Lifetime License"
+                          : "Switch to Trial Key"}
+                    </Button>
+                  </div>
+                </form>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-zinc-200 bg-white lg:col-span-5">
+            <CardHeader>
+              <CardTitle className="text-sm">License Terms &amp; Entitlements</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-xs text-zinc-600">
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                <p className="font-semibold text-zinc-900">
+                  Single-Instance Activation
+                </p>
+                <p className="mt-1">{licenseState.singleInstanceNotice}</p>
+              </div>
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                <p className="font-semibold text-zinc-900">
+                  Cloudflare Edge &amp; Enterprise Features Included
+                </p>
+                <p className="mt-1">
+                  Lifetime OEM activation unlocks unlimited connected Smart TVs,
+                  Cloudflare R2 zero-egress media delivery, Crown Studio, QR
+                  Attribution Analytics, and custom RBAC without recurring per-screen
+                  subscriptions.
+                </p>
+              </div>
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                <p className="font-semibold text-zinc-900">
+                  Super Admin Access Control
+                </p>
+                <p className="mt-1">
+                  For security, this tab is disabled for non-Super-Admin accounts
+                  and full activation keys are never exposed to standard roles.
                 </p>
               </div>
             </CardContent>

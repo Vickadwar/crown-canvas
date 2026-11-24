@@ -175,7 +175,13 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
     setEditDeptId(scr.departmentId ?? "");
     setEditGroupId(scr.groupId ?? "");
     setEditRole(scr.screenRole);
-    setEditOrientation(scr.orientation || "landscape");
+    const metaMode =
+      typeof scr.metadata?.displayMode === "string"
+        ? scr.metadata.displayMode
+        : scr.orientation === "portrait"
+          ? "portrait_9_16"
+          : "landscape_16_9";
+    setEditOrientation(metaMode);
   }
 
   async function handleClaimPairing(e: React.FormEvent) {
@@ -226,7 +232,10 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
           departmentId: editDeptId || null,
           groupId: editGroupId || null,
           screenRole: editRole,
-          orientation: editOrientation,
+          orientation: editOrientation.startsWith("portrait")
+            ? "portrait"
+            : "landscape",
+          displayMode: editOrientation,
         }),
       });
       if (!res.ok) {
@@ -494,8 +503,8 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
               type="button"
               onClick={() => setViewMode("table")}
               className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${viewMode === "table"
-                  ? "bg-white text-zinc-950 shadow-2xs"
-                  : "text-zinc-500 hover:text-zinc-900"
+                ? "bg-white text-zinc-950 shadow-2xs"
+                : "text-zinc-500 hover:text-zinc-900"
                 }`}
             >
               <List className="size-3.5" />
@@ -505,8 +514,8 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
               type="button"
               onClick={() => setViewMode("grid")}
               className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${viewMode === "grid"
-                  ? "bg-white text-zinc-950 shadow-2xs"
-                  : "text-zinc-500 hover:text-zinc-900"
+                ? "bg-white text-zinc-950 shadow-2xs"
+                : "text-zinc-500 hover:text-zinc-900"
                 }`}
             >
               <LayoutGrid className="size-3.5" />
@@ -557,8 +566,8 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
               setPage(1);
             }}
             className={`rounded-full px-3 py-1 text-xs font-medium transition ${statusFilter === pill.id
-                ? "bg-zinc-950 text-white"
-                : "border border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
+              ? "bg-zinc-950 text-white"
+              : "border border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
               }`}
           >
             {pill.label}
@@ -980,14 +989,17 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Orientation</Label>
+                <Label className="text-xs">Orientation &amp; Display Mode</Label>
                 <ModernSelect
                   size="sm"
                   value={editOrientation}
                   onValueChange={setEditOrientation}
                   options={[
-                    { value: "landscape", label: "Landscape (16:9)" },
-                    { value: "portrait", label: "Portrait (9:16)" },
+                    { value: "landscape_16_9", label: "Landscape (16:9 Standard TV)" },
+                    { value: "portrait_9_16", label: "Portrait (9:16 Vertical Totem)" },
+                    { value: "portrait_rotate_90", label: "Portrait — Software Rotate 90° CW" },
+                    { value: "portrait_rotate_270", label: "Portrait — Software Rotate 270° CCW" },
+                    { value: "ultrawide_21_9", label: "Ultrawide Bar (21:9 / Stretched LED)" },
                   ]}
                 />
               </div>

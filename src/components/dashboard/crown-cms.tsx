@@ -525,7 +525,7 @@ export function CrownCms() {
       {
         label: "Design Studio",
         items: [
-          { id: "templates", label: "Templates Gallery", icon: LayoutTemplate },
+          { id: "templates", label: "Templates & Slides", icon: LayoutTemplate },
           { id: "studio", label: "Crown Studio", icon: Sparkles },
         ],
       },
@@ -870,6 +870,11 @@ export function CrownCms() {
                   data={data}
                   selectedPlaylistId={selectedPlaylistId}
                   onSelectPlaylist={setSelectedPlaylistId}
+                  onBrowseTemplatesForPlaylist={(plId) => {
+                    setSelectedPlaylistId(plId);
+                    setQpAddToPlaylist(true);
+                    setActiveTab("templates");
+                  }}
                   onRefresh={fetchOverview}
                 />
               )}
@@ -889,6 +894,8 @@ export function CrownCms() {
                   onOpenCustom={openCustomTemplateInStudio}
                   onDeleteCustom={handleDeleteCustomTemplate}
                   onCreateBlank={openBlankCanvasInStudio}
+                  onEditPublishedSlide={loadQuickPostIntoStudio}
+                  onRefresh={fetchOverview}
                 />
               )}
 

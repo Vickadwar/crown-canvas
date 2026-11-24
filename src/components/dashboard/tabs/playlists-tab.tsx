@@ -69,6 +69,7 @@ interface PlaylistsTabProps {
   data: OverviewPayload;
   selectedPlaylistId: string;
   onSelectPlaylist: (id: string) => void;
+  onBrowseTemplatesForPlaylist?: (playlistId: string) => void;
   onRefresh: () => Promise<void>;
 }
 
@@ -187,6 +188,7 @@ export function PlaylistsTab({
   data,
   selectedPlaylistId,
   onSelectPlaylist,
+  onBrowseTemplatesForPlaylist,
   onRefresh,
 }: PlaylistsTabProps) {
   const confirm = useConfirm();
@@ -739,6 +741,18 @@ export function PlaylistsTab({
                       >
                         Crown Studio Slides ({data.quickPosts.length})
                       </button>
+                      {onBrowseTemplatesForPlaylist && activePlaylist && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onBrowseTemplatesForPlaylist(activePlaylist.id)
+                          }
+                          className="inline-flex items-center gap-1 rounded-md bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 transition hover:bg-violet-100"
+                        >
+                          <Sparkles className="size-3" />
+                          + New from Template
+                        </button>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <Input
