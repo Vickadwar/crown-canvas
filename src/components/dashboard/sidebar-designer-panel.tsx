@@ -120,6 +120,25 @@ async function uploadOptimizedImage(
   };
 }
 
+export const BUILTIN_DEFAULT_SIDEBAR_ID = "__default_builtin__";
+
+const BUILTIN_DEFAULT_SIDEBAR: SidebarProfileItem = {
+  id: BUILTIN_DEFAULT_SIDEBAR_ID,
+  name: "Default Showroom Sidebar",
+  description: "Shared default sidebar for all playlists unless overridden.",
+  theme: "white_minimal",
+  displayName: null,
+  showClock: true,
+  showWeather: true,
+  showQr: true,
+  qrTitle: "Explore Decorative Range",
+  promoLabel: "Scan to browse Crown Decorative paints & shades.",
+  qrTargetUrl: CROWN_DECORATIVE_QR_URL,
+  slideIntervalSeconds: 6,
+  productIds: [],
+  isDefault: true,
+};
+
 // =============================================================================
 // 1. SIDEBAR PROFILES PANEL (Per-Playlist Reusable Sidebars)
 // =============================================================================
@@ -137,13 +156,23 @@ export function SidebarProfilesPanel({
 }) {
   const confirm = useConfirm();
   const profiles = useMemo(() => data.sidebarProfiles ?? [], [data.sidebarProfiles]);
+  const hasPersistedDefault = useMemo(
+    () => profiles.some((p) => p.isDefault),
+    [profiles]
+  );
+  const displayProfiles = useMemo(
+    () => (hasPersistedDefault ? profiles : [BUILTIN_DEFAULT_SIDEBAR, ...profiles]),
+    [hasPersistedDefault, profiles]
+  );
   const products = useMemo(
     () => (data.showcaseProducts ?? []).filter((p) => p.isActive),
     [data.showcaseProducts]
   );
 
   const initialEditProfile = initialEditProfileId
-    ? profiles.find((p) => p.id === initialEditProfileId) ?? null
+    ? initialEditProfileId === BUILTIN_DEFAULT_SIDEBAR_ID
+      ? (profiles.find((p) => p.isDefault) ?? BUILTIN_DEFAULT_SIDEBAR)
+      : (profiles.find((p) => p.id === initialEditProfileId) ?? null)
     : null;
 
   const [showForm, setShowForm] = useState(Boolean(initialEditProfile));
@@ -188,6 +217,11 @@ export function SidebarProfilesPanel({
   );
   const [saving, setSaving] = useState(false);
 
+  const playlistsUsingDefault = useMemo(
+    () => data.playlists.filter((pl) => !pl.sidebarProfileId).map((pl) => pl.name),
+    [data.playlists]
+  );
+
   const playlistsByProfileId = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const pl of data.playlists) {
@@ -215,7 +249,7 @@ export function SidebarProfilesPanel({
     setQrTargetUrl(CROWN_DECORATIVE_QR_URL);
     setSlideIntervalSeconds(6);
     setSelectedProductIds([]);
-    setIsDefault(profiles.length === 0);
+    setIsDefault(!hasPersistedDefault);
     setShowForm(true);
   }
 
@@ -243,6 +277,8 @@ export function SidebarProfilesPanel({
     if (!name.trim()) return;
     setSaving(true);
     try {
+      const isPersistedEdit =
+        Boolean(editing) && editing?.id !== BUILTIN_DEFAULT_SIDEBAR_ID;
       const payload = {
         name: name.trim(),
         description: description.trim() || null,
@@ -256,12 +292,15 @@ export function SidebarProfilesPanel({
         qrTargetUrl: qrTargetUrl.trim() || CROWN_DECORATIVE_QR_URL,
         slideIntervalSeconds: Math.max(3, Math.min(60, Number(slideIntervalSeconds) || 6)),
         productIds: selectedProductIds,
-        isDefault,
+        isDefault:
+          editing?.id === BUILTIN_DEFAULT_SIDEBAR_ID ? true : isDefault,
       };
       const res = await fetch(
-        editing ? `/api/sidebar-profiles/${editing.id}` : "/api/sidebar-profiles",
+        isPersistedEdit
+          ? `/api/sidebar-profiles/${editing!.id}`
+          : "/api/sidebar-profiles",
         {
-          method: editing ? "PATCH" : "POST",
+          method: isPersistedEdit ? "PATCH" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         }
@@ -283,6 +322,21 @@ export function SidebarProfilesPanel({
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSetAsDefault(p: SidebarProfileItem) {
+    if (p.id === BUILTIN_DEFAULT_SIDEBAR_ID) return;
+    const res = await fetch(`/api/sidebar-profiles/${p.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isDefault: true }),
+    });
+    if (!res.ok) {
+      toast.error("Could not set default sidebar");
+      return;
+    }
+    toast.success(`"${p.name}" is now the Default Sidebar for all TVs`);
+    await onRefresh();
   }
 
   async function handleDelete(p: SidebarProfileItem) {
@@ -555,90 +609,108 @@ export function SidebarProfilesPanel({
         </Card>
       )}
 
-      {profiles.length === 0 ? (
-        <Card>
-          <CardContent className="p-10 text-center text-xs text-zinc-500">
-            No custom sidebar profiles yet. All playlists currently share the built-in showroom sidebar. Click{" "}
-            <strong>New Sidebar Profile</strong> above or use{" "}
-            <strong>+ Custom Sidebar</strong> directly on any playlist!
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {profiles.map((p) => {
-            const attached = playlistsByProfileId.get(p.id) ?? [];
-            return (
-              <Card key={p.id} className="flex flex-col border-zinc-200 bg-white">
-                <CardHeader className="pb-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span
-                          className={`size-3 rounded-full border ${THEME_SWATCH[p.theme] ?? "bg-white border-zinc-300"
-                            }`}
-                        />
-                        <CardTitle className="truncate text-sm">{p.name}</CardTitle>
-                        {p.isDefault && (
-                          <Badge variant="success" className="text-[10px]">
-                            <Star className="size-2.5" />
-                            Default
-                          </Badge>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-zinc-500">
-                        {p.productIds.length > 0
-                          ? `${p.productIds.length} curated product(s)`
-                          : "All active products"}{" "}
-                        • {p.slideIntervalSeconds}s rotation
-                      </p>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="flex flex-1 flex-col justify-between gap-3 text-xs">
-                  <div className="space-y-1.5">
-                    {p.showQr && (
-                      <p className="flex items-center gap-1.5 truncate text-[11px] text-zinc-600">
-                        <QrCode className="size-3.5 shrink-0 text-blue-600" />
-                        <span className="truncate font-medium">
-                          {p.qrTitle || "Tracked QR"}:
-                        </span>
-                        <span className="truncate text-zinc-400">
-                          {p.qrTargetUrl || CROWN_DECORATIVE_QR_URL}
-                        </span>
-                      </p>
-                    )}
-                    <div className="flex flex-wrap gap-1 pt-1">
-                      {attached.length === 0 ? (
-                        <span className="text-[11px] italic text-zinc-400">
-                          Not attached to a specific playlist yet
-                        </span>
-                      ) : (
-                        attached.map((plName) => (
-                          <Badge key={plName} variant="info" className="text-[10px]">
-                            {plName}
-                          </Badge>
-                        ))
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {displayProfiles.map((p) => {
+          const isBuiltin = p.id === BUILTIN_DEFAULT_SIDEBAR_ID;
+          const explicitAttached = playlistsByProfileId.get(p.id) ?? [];
+          const inheritedAttached = p.isDefault ? playlistsUsingDefault : [];
+          const attached = Array.from(
+            new Set([...explicitAttached, ...inheritedAttached])
+          );
+          return (
+            <Card
+              key={p.id}
+              className={`flex flex-col bg-white ${p.isDefault ? "border-emerald-300 ring-1 ring-emerald-200/60" : "border-zinc-200"}`}
+            >
+              <CardHeader className="pb-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`size-3 rounded-full border ${THEME_SWATCH[p.theme] ?? "bg-white border-zinc-300"
+                          }`}
+                      />
+                      <CardTitle className="truncate text-sm">{p.name}</CardTitle>
+                      {p.isDefault && (
+                        <Badge variant="success" className="text-[10px]">
+                          <Star className="size-2.5" />
+                          Default
+                        </Badge>
+                      )}
+                      {isBuiltin && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          Built-in • Click Edit to Customize
+                        </Badge>
                       )}
                     </div>
+                    <p className="text-[11px] text-zinc-500">
+                      {p.productIds.length > 0
+                        ? `${p.productIds.length} curated product(s)`
+                        : "All active products"}{" "}
+                      • {p.slideIntervalSeconds}s rotation
+                    </p>
                   </div>
+                </div>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col justify-between gap-3 text-xs">
+                <div className="space-y-1.5">
+                  {p.showQr && (
+                    <p className="flex items-center gap-1.5 truncate text-[11px] text-zinc-600">
+                      <QrCode className="size-3.5 shrink-0 text-blue-600" />
+                      <span className="truncate font-medium">
+                        {p.qrTitle || "Tracked QR"}:
+                      </span>
+                      <span className="truncate text-zinc-400">
+                        {p.qrTargetUrl || CROWN_DECORATIVE_QR_URL}
+                      </span>
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-1 pt-1">
+                    {attached.length === 0 ? (
+                      <span className="text-[11px] italic text-zinc-400">
+                        {p.isDefault
+                          ? "Active fallback for all split-screen playlists"
+                          : "Not attached to a specific playlist yet"}
+                      </span>
+                    ) : (
+                      attached.map((plName) => (
+                        <Badge key={plName} variant="info" className="text-[10px]">
+                          {plName}
+                        </Badge>
+                      ))
+                    )}
+                  </div>
+                </div>
 
-                  <div className="flex items-center justify-end gap-1.5 border-t border-zinc-100 pt-2.5">
+                <div className="flex items-center justify-end gap-1.5 border-t border-zinc-100 pt-2.5">
+                  {!p.isDefault && !isBuiltin && (
                     <Button
                       size="xs"
                       variant="ghost"
-                      onClick={() => openEdit(p, true)}
+                      title="Make this the Default Sidebar for all playlists"
+                      onClick={() => void handleSetAsDefault(p)}
                     >
-                      <Copy className="size-3" />
-                      Clone
+                      <Star className="size-3 text-amber-500" />
+                      Set Default
                     </Button>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={() => openEdit(p)}
-                    >
-                      <Edit3 className="size-3" />
-                      Edit
-                    </Button>
+                  )}
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => openEdit(p, true)}
+                  >
+                    <Copy className="size-3" />
+                    Clone
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant={isBuiltin ? "default" : "outline"}
+                    onClick={() => openEdit(p)}
+                  >
+                    <Edit3 className="size-3" />
+                    {isBuiltin ? "Edit Default" : "Edit"}
+                  </Button>
+                  {!isBuiltin && (
                     <Button
                       size="icon-xs"
                       variant="ghost"
@@ -647,13 +719,13 @@ export function SidebarProfilesPanel({
                     >
                       <Trash2 className="size-3.5 text-zinc-400 hover:text-rose-600" />
                     </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      )}
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }

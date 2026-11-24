@@ -126,7 +126,8 @@ export async function GET(
           : db
             .select()
             .from(sidebarProfiles)
-            .orderBy(desc(sidebarProfiles.isDefault), desc(sidebarProfiles.updatedAt))
+            .where(eq(sidebarProfiles.isDefault, true))
+            .orderBy(desc(sidebarProfiles.updatedAt))
             .limit(1)
       );
       const prof = profileRows[0] ?? null;

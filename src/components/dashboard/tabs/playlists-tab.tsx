@@ -27,6 +27,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   CheckCircle2,
+  Edit3,
   Film,
   Globe,
   GripVertical,
@@ -56,6 +57,7 @@ import { ModernSelect } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { TaglineBuilder } from "@/components/dashboard/tagline-builder";
 import {
+  BUILTIN_DEFAULT_SIDEBAR_ID,
   ShowcaseProductsPanel,
   SidebarProfilesPanel,
 } from "@/components/dashboard/sidebar-designer-panel";
@@ -410,6 +412,10 @@ export function PlaylistsTab({
   );
 
   const sidebarProfiles = data.sidebarProfiles ?? [];
+  const defaultSidebarProfile = sidebarProfiles.find((sp) => sp.isDefault) ?? null;
+  const sidebarProfilesDisplayCount = defaultSidebarProfile
+    ? sidebarProfiles.length
+    : sidebarProfiles.length + 1;
   const showcaseProductsCount = (data.showcaseProducts ?? []).length;
 
   return (
@@ -425,7 +431,7 @@ export function PlaylistsTab({
             },
             {
               id: "sidebars" as const,
-              label: `Sidebar Profiles (${sidebarProfiles.length})`,
+              label: `Sidebar Profiles (${sidebarProfilesDisplayCount})`,
               icon: LayoutPanelLeft,
             },
             {
@@ -659,25 +665,52 @@ export function PlaylistsTab({
                       ]}
                     />
                   </div>
-                  <div className="w-48">
-                    <ModernSelect
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-48">
+                      <ModernSelect
+                        size="sm"
+                        value={activePlaylist.sidebarProfileId ?? ""}
+                        onValueChange={(v) =>
+                          void handlePatchPlaylist(
+                            activePlaylist.id,
+                            { sidebarProfileId: v || null },
+                            "Attached sidebar profile & pushed to TVs"
+                          )
+                        }
+                        options={[
+                          {
+                            value: "",
+                            label: defaultSidebarProfile
+                              ? `Default (${defaultSidebarProfile.name})`
+                              : "Default Sidebar",
+                          },
+                          ...sidebarProfiles.map((sp) => ({
+                            value: sp.id,
+                            label: sp.name,
+                          })),
+                        ]}
+                      />
+                    </div>
+                    <Button
                       size="sm"
-                      value={activePlaylist.sidebarProfileId ?? ""}
-                      onValueChange={(v) =>
-                        void handlePatchPlaylist(
-                          activePlaylist.id,
-                          { sidebarProfileId: v || null },
-                          "Attached sidebar profile & pushed to TVs"
-                        )
+                      variant="outline"
+                      title={
+                        activePlaylist.sidebarProfileId
+                          ? "Edit this playlist's attached sidebar"
+                          : "Edit the Default Sidebar used by this playlist"
                       }
-                      options={[
-                        { value: "", label: "Default Sidebar" },
-                        ...sidebarProfiles.map((sp) => ({
-                          value: sp.id,
-                          label: sp.name,
-                        })),
-                      ]}
-                    />
+                      onClick={() => {
+                        setEditProfileId(
+                          activePlaylist.sidebarProfileId ||
+                            defaultSidebarProfile?.id ||
+                            BUILTIN_DEFAULT_SIDEBAR_ID
+                        );
+                        setSubTab("sidebars");
+                      }}
+                    >
+                      <Edit3 className="size-3.5 text-zinc-700" />
+                      Edit Sidebar
+                    </Button>
                   </div>
                   <Button
                     size="sm"
