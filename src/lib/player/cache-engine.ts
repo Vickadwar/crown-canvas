@@ -13,6 +13,26 @@ const CACHE_NAME = "crown-canvas-media-v1";
 const IDB_NAME = "crown-canvas-player-db";
 const IDB_STORE = "asset-meta";
 
+// Tracks active asset downloads so `/player` never double-downloads the same video
+// simultaneously from cloud storage while it is being saved to local Cache Storage.
+const inFlightDownloads = new Map<string, Promise<boolean>>();
+
+function isCacheableCloudAsset(asset: ManifestAssetRef): boolean {
+  if (asset.mediaType === "web_url") return false;
+  if (!asset.publicUrl) return false;
+  if (asset.mediaType === "pdf") {
+    // Cache uploaded cloud PDFs (same-origin, Cloudflare R2, or Supabase Storage) locally
+    // so multi-page brochures download ONCE instead of on every playlist rotation.
+    return (
+      asset.publicUrl.startsWith("/") ||
+      /\.(r2\.dev|r2\.cloudflarestorage\.com|supabase\.co|supabase\.in)\//i.test(
+        asset.publicUrl
+      )
+    );
+  }
+  return true;
+}
+
 export interface CachedAssetMeta {
   assetId: string;
   sha256Checksum: string;
@@ -160,9 +180,7 @@ export async function syncMediaAssetsToDisk(
   onProgress?: (progress: SyncProgress) => void,
   maxCacheBytesOverride?: number
 ): Promise<SyncProgress> {
-  const downloadable = assets.filter(
-    (a) => a.mediaType !== "web_url" && a.mediaType !== "pdf"
-  );
+  const downloadable = assets.filter(isCacheableCloudAsset);
 
   const persisted = await requestPersistentPlayerStorage();
 
@@ -254,37 +272,60 @@ export async function syncMediaAssetsToDisk(
       if (quotaExhausted) {
         continue;
       }
-      try {
-        const fetched = await fetch(asset.publicUrl, { mode: "cors" });
-        if (!fetched.ok) {
-          throw new Error(`HTTP ${fetched.status} fetching media`);
-        }
-        const blob = await fetched.blob();
-        if (totalBytes + blob.size <= maxCacheBytes) {
-          const storedResponse = new Response(blob, {
-            headers: { "Content-Type": asset.mimeType || blob.type },
-          });
-          await cache.put(cacheKey, storedResponse);
-          await putMeta({
-            assetId: asset.assetId,
-            sha256Checksum: asset.sha256Checksum,
-            publicUrl: asset.publicUrl,
-            mimeType: asset.mimeType,
-            sizeBytes: blob.size,
-            cachedAt: Date.now(),
-          });
-          totalBytes += blob.size;
+      const existingFlight = inFlightDownloads.get(cacheKey);
+      if (existingFlight) {
+        await existingFlight;
+        const nowCached = await cache.match(cacheKey).catch(() => undefined);
+        if (nowCached) {
           cachedCount++;
-        } else {
-          lastError = `Device cache cap (${Math.round(maxCacheBytes / (1024 * 1024))} MB) reached`;
+          continue;
         }
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "QuotaExceededError") {
-          quotaExhausted = true;
-          lastError = "TV browser storage full — streaming remaining media";
-        } else {
-          lastError = err instanceof Error ? err.message : "Download failed";
+      }
+      const downloadPromise = (async (): Promise<boolean> => {
+        try {
+          const fetched = await fetch(asset.publicUrl, { mode: "cors" });
+          if (!fetched.ok) {
+            throw new Error(`HTTP ${fetched.status} fetching media`);
+          }
+          const blob = await fetched.blob();
+          if (totalBytes + blob.size <= maxCacheBytes) {
+            const storedResponse = new Response(blob, {
+              headers: {
+                "Content-Type": asset.mimeType || blob.type,
+                "Cache-Control": "public, max-age=31536000, immutable",
+              },
+            });
+            await cache.put(cacheKey, storedResponse);
+            await putMeta({
+              assetId: asset.assetId,
+              sha256Checksum: asset.sha256Checksum,
+              publicUrl: asset.publicUrl,
+              mimeType: asset.mimeType,
+              sizeBytes: blob.size,
+              cachedAt: Date.now(),
+            });
+            totalBytes += blob.size;
+            cachedCount++;
+            return true;
+          } else {
+            lastError = `Device cache cap (${Math.round(maxCacheBytes / (1024 * 1024))} MB) reached`;
+            return false;
+          }
+        } catch (err) {
+          if (err instanceof DOMException && err.name === "QuotaExceededError") {
+            quotaExhausted = true;
+            lastError = "TV browser storage full — streaming remaining media";
+          } else {
+            lastError = err instanceof Error ? err.message : "Download failed";
+          }
+          return false;
         }
+      })();
+      inFlightDownloads.set(cacheKey, downloadPromise);
+      try {
+        await downloadPromise;
+      } finally {
+        inFlightDownloads.delete(cacheKey);
       }
     } else {
       const sizeBytes = meta?.sizeBytes ?? (await existingResp.clone().blob()).size;
@@ -324,8 +365,7 @@ export async function resolveAssetPlaybackUrl(
   asset: ManifestAssetRef
 ): Promise<{ url: string; isBlob: boolean }> {
   if (
-    asset.mediaType === "web_url" ||
-    asset.mediaType === "pdf" ||
+    !isCacheableCloudAsset(asset) ||
     typeof window === "undefined" ||
     !("caches" in window)
   ) {
@@ -333,8 +373,15 @@ export async function resolveAssetPlaybackUrl(
   }
 
   try {
-    const cache = await caches.open(CACHE_NAME);
     const cacheKey = buildCacheKey(asset.assetId, asset.sha256Checksum);
+    // If this asset is actively downloading into Cache Storage right now, wait for it
+    // instead of opening a duplicate cloud stream (cuts first-load bandwidth by 50%).
+    const inflight = inFlightDownloads.get(cacheKey);
+    if (inflight) {
+      await inflight.catch(() => false);
+    }
+
+    const cache = await caches.open(CACHE_NAME);
     const match = await cache.match(cacheKey);
     if (match) {
       const blob = await match.blob();

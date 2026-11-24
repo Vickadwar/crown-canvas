@@ -57,7 +57,7 @@ export async function DELETE(
 
   const storageResult =
     otherRefs.length === 0
-      ? await purgeMediaObject(existing.storagePath)
+      ? await purgeMediaObject(existing.storagePath, existing.publicUrl)
       : { purged: false, reason: "Shared by another deduplicated asset" };
 
   await Promise.all([

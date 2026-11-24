@@ -72,6 +72,13 @@ describe("Smart TV browser compatibility helpers", () => {
     );
     assert.equal(
       shouldUseVideoCrossOrigin(
+        "https://pub-3487573cd6b4470384d010b0b24aefbb.r2.dev/marketing/clip.mp4",
+        "https://digital-screen-three.vercel.app"
+      ),
+      true
+    );
+    assert.equal(
+      shouldUseVideoCrossOrigin(
         "https://digital-screen-three.vercel.app/clip.mp4",
         "https://digital-screen-three.vercel.app"
       ),

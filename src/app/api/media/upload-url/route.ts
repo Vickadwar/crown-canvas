@@ -11,10 +11,10 @@ import { db, isDatabaseConfigured, mediaAssets } from "@/db";
 import { requireAdminAccess } from "@/lib/auth-guard";
 import {
   createSignedMediaUpload,
+  getActiveStorageProvider,
+  getMaxUploadBytes,
   isStorageConfigured,
 } from "@/lib/storage-provider";
-
-const MAX_FREE_TIER_BYTES = 48 * 1024 * 1024; // 48 MB safety cap below Supabase 50 MB limit
 
 const uploadRequestSchema = z.object({
   fileName: z.string().min(1).max(200),
@@ -28,11 +28,15 @@ export async function POST(request: Request) {
   const { errorResponse } = await requireAdminAccess({ disallowAuditor: true });
   if (errorResponse) return errorResponse;
 
+  const activeProvider = getActiveStorageProvider();
+
   if (!isStorageConfigured()) {
     return Response.json(
       {
         error:
-          "Supabase Storage is not configured. Add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env.local.",
+          activeProvider === "r2"
+            ? "Cloudflare R2 storage is not fully configured. Verify R2_ACCOUNT_ID/S3_API, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, and R2_PUBLIC_BASE_URL."
+            : "Cloud storage is not configured. Check your environment variables.",
       },
       { status: 503 }
     );
@@ -48,14 +52,15 @@ export async function POST(request: Request) {
       );
     }
 
+    const maxUploadBytes = getMaxUploadBytes(activeProvider);
     if (
       parsed.data.fileSizeBytes &&
-      parsed.data.fileSizeBytes > MAX_FREE_TIER_BYTES
+      parsed.data.fileSizeBytes > maxUploadBytes
     ) {
+      const maxMb = Math.round(maxUploadBytes / (1024 * 1024));
       return Response.json(
         {
-          error:
-            "File exceeds the 48 MB upload limit. Enable Auto-Compress (Balanced 720p for longer videos) or link via YouTube/Web URL (0 MB storage).",
+          error: `File exceeds the ${maxMb} MB single-file upload limit. Enable Auto-Compress (Balanced 720p for longer videos) or link an external URL.`,
         },
         { status: 413 }
       );
@@ -87,7 +92,7 @@ export async function POST(request: Request) {
     const safeFileName = parsed.data.fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
     const objectPath = `${parsed.data.departmentCode.toLowerCase()}/${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${safeFileName}`;
 
-    const signed = await createSignedMediaUpload(objectPath);
+    const signed = await createSignedMediaUpload(objectPath, parsed.data.mimeType);
 
     return Response.json({
       deduplicated: false,

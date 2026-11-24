@@ -1670,6 +1670,7 @@ export function CanvasEditor({
                               error?: string;
                               deduplicated?: boolean;
                               signedUrl?: string;
+                              uploadHeaders?: Record<string, string>;
                               publicUrl?: string;
                               storagePath?: string;
                             };
@@ -1680,7 +1681,9 @@ export function CanvasEditor({
                             if (!urlJson.deduplicated && urlJson.signedUrl) {
                               const putRes = await fetch(urlJson.signedUrl, {
                                 method: "PUT",
-                                headers: { "Content-Type": uploadFile.type || "image/webp" },
+                                headers: urlJson.uploadHeaders ?? {
+                                  "Content-Type": uploadFile.type || "image/webp",
+                                },
                                 body: uploadFile,
                               });
                               if (!putRes.ok) {

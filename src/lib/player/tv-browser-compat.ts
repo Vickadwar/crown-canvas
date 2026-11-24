@@ -349,7 +349,7 @@ export function addFullscreenChangeListener(listener: () => void): () => void {
 export function shouldUseVideoCrossOrigin(
   videoUrl: string,
   currentOrigin?: string,
-  supabaseHost?: string
+  trustedHost?: string
 ): boolean {
   if (!videoUrl) return false;
   if (videoUrl.startsWith("blob:") || videoUrl.startsWith("/")) return true;
@@ -358,11 +358,13 @@ export function shouldUseVideoCrossOrigin(
     if (currentOrigin && parsed.origin === currentOrigin) return true;
     if (
       parsed.hostname.endsWith(".supabase.co") ||
-      parsed.hostname.endsWith(".supabase.in")
+      parsed.hostname.endsWith(".supabase.in") ||
+      parsed.hostname.endsWith(".r2.dev") ||
+      parsed.hostname.endsWith(".r2.cloudflarestorage.com")
     ) {
       return true;
     }
-    if (supabaseHost && parsed.hostname === supabaseHost) return true;
+    if (trustedHost && parsed.hostname === trustedHost) return true;
     return false;
   } catch {
     return false;

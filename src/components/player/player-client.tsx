@@ -667,6 +667,41 @@ export function PlayerClient() {
             mediaType: item.mediaType,
           }));
 
+        // Also cache Sidebar Showcase Product images & Studio Slide images once on disk
+        const extraImageUrls = new Map<string, string>();
+        for (const prod of data.showcaseProducts ?? []) {
+          if (prod.imageUrl && prod.imageUrl.startsWith("http")) {
+            extraImageUrls.set(`prod-${prod.id}`, prod.imageUrl);
+          }
+        }
+        for (const item of data.items) {
+          if (item.kind !== "quick_post") continue;
+          const cfg = item.slideConfig;
+          if (
+            cfg.canvasDoc?.backgroundImageUrl &&
+            cfg.canvasDoc.backgroundImageUrl.startsWith("http")
+          ) {
+            extraImageUrls.set(
+              `qp-bg-${item.quickPostId}`,
+              cfg.canvasDoc.backgroundImageUrl
+            );
+          }
+          for (const el of cfg.canvasDoc?.elements ?? []) {
+            if (el.imageUrl && el.imageUrl.startsWith("http")) {
+              extraImageUrls.set(`qp-el-${el.id}`, el.imageUrl);
+            }
+          }
+        }
+        for (const [id, url] of extraImageUrls.entries()) {
+          mediaRefs.push({
+            assetId: id,
+            sha256Checksum: url.slice(-24),
+            publicUrl: url,
+            mimeType: "image/webp",
+            mediaType: "image",
+          });
+        }
+
         await syncMediaAssetsToDisk(
           mediaRefs,
           tvProfileRef.current.apiHardwareType,
@@ -1625,7 +1660,22 @@ export function PlayerClient() {
     />
   ) : currentItem.mediaType === "video" ? (
     (() => {
-      const videoSrc = currentPlaybackUrl || currentItem.publicUrl;
+      const cachedSlotUrl = currentMediaKey ? slotUrls[currentMediaKey] : undefined;
+      // Avoid double-downloading on first load while cache-engine is actively saving this clip
+      if (!cachedSlotUrl && syncProgress.status === "downloading") {
+        return (
+          <div className="flex h-full w-full flex-col items-center justify-center bg-black p-8 text-center text-zinc-300">
+            <HardDrive className="mb-3 size-8 animate-pulse text-sky-400" />
+            <p className="text-sm font-semibold text-white">
+              Caching &ldquo;{currentItem.title}&rdquo; to local display storage...
+            </p>
+            <p className="mt-1 text-xs text-zinc-400">
+              {syncProgress.cachedCount}/{syncProgress.totalCount} assets synced for zero-buffer offline playback
+            </p>
+          </div>
+        );
+      }
+      const videoSrc = cachedSlotUrl || currentItem.publicUrl;
       const slideKey = `${currentItem.id}-${safeIndex}`;
       const allowCors =
         corsFallbackKey !== slideKey &&

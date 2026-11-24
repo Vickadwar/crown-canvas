@@ -16,6 +16,7 @@ import {
   HardDrive,
   Image as ImageIcon,
   ListVideo,
+  Play,
   Plus,
   Search,
   Trash2,
@@ -86,6 +87,7 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
   const [deptFilter, setDeptFilter] = useState("");
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [addMode, setAddMode] = useState<"upload" | "url">("upload");
+  const [previewVideo, setPreviewVideo] = useState<MediaAssetItem | null>(null);
 
   // Upload & GPU Video Compression state
   const [title, setTitle] = useState("");
@@ -306,7 +308,7 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
       } else {
         const putRes = await fetch(urlJson.signedUrl, {
           method: "PUT",
-          headers: {
+          headers: urlJson.uploadHeaders ?? {
             "Content-Type": uploadFile.type || "application/octet-stream",
           },
           body: uploadFile,
@@ -919,22 +921,29 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                 key={asset.id}
                 className="flex flex-col overflow-hidden transition hover:border-zinc-300"
               >
-                {/* Uniform 16:9 Thumbnail */}
+                {/* Uniform 16:9 Thumbnail (Zero-Bandwidth Video Card + On-Demand Preview) */}
                 <div className="relative aspect-video w-full overflow-hidden border-b border-zinc-200 bg-zinc-950">
                   {asset.mediaType === "image" ? (
                     /* eslint-disable-next-line @next/next/no-img-element */
                     <img
                       src={asset.publicUrl}
                       alt={asset.title}
+                      loading="lazy"
                       className="h-full w-full object-cover"
                     />
                   ) : asset.mediaType === "video" ? (
-                    <video
-                      src={asset.publicUrl}
-                      muted
-                      preload="metadata"
-                      className="h-full w-full object-cover"
-                    />
+                    <button
+                      type="button"
+                      onClick={() => setPreviewVideo(asset)}
+                      className="group/vid relative flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-zinc-900 via-zinc-950 to-slate-900 text-zinc-200 transition hover:from-zinc-800 hover:to-slate-800"
+                    >
+                      <span className="flex size-12 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white shadow-lg backdrop-blur transition group-hover/vid:scale-105 group-hover/vid:bg-white/20">
+                        <Play className="ml-0.5 size-5 fill-current" />
+                      </span>
+                      <span className="text-[11px] font-medium text-zinc-300">
+                        Click to preview video
+                      </span>
+                    </button>
                   ) : (
                     <div className="flex h-full flex-col items-center justify-center gap-2 bg-zinc-900 text-zinc-400">
                       <Globe className="size-8 text-blue-400" />
@@ -1075,6 +1084,49 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
               </Card>
             );
           })}
+        </div>
+      )}
+
+      {/* On-Demand Video Preview Modal (Zero Egress Until Explicitly Opened) */}
+      {previewVideo && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs"
+          onClick={() => setPreviewVideo(null)}
+        >
+          <div
+            className="w-full max-w-3xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3 text-white">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">
+                  {previewVideo.title}
+                </p>
+                <p className="text-[11px] text-zinc-400">
+                  {previewVideo.durationSeconds}s •{" "}
+                  {(previewVideo.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                className="text-zinc-300 hover:bg-zinc-800 hover:text-white"
+                onClick={() => setPreviewVideo(null)}
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+            <div className="aspect-video w-full bg-black">
+              <video
+                src={previewVideo.publicUrl}
+                controls
+                autoPlay
+                playsInline
+                className="h-full w-full object-contain"
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>

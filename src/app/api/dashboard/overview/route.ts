@@ -43,7 +43,11 @@ import { ensureSystemRoles, getAuthPasswordPolicy } from "@/lib/auth-policy";
 import { ensureShowcaseProducts } from "@/app/api/showcase-products/route";
 import { getSystemRoleName } from "@/lib/permissions";
 import { computeScreenHealth } from "@/lib/screen-health";
-import { getActiveStorageProvider } from "@/lib/storage-provider";
+import {
+  getActiveStorageProvider,
+  getStorageQuotaBytes,
+  isStorageConfigured,
+} from "@/lib/storage-provider";
 import {
   DEMO_BRANCHES,
   DEMO_COUNTRIES,
@@ -61,10 +65,7 @@ export async function GET() {
     process.env.NEXT_PUBLIC_SUPABASE_URL &&
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   );
-  const storageReady = Boolean(
-    process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  );
+  const storageReady = isStorageConfigured();
 
   if (!dbReady) {
     return Response.json({
@@ -85,7 +86,7 @@ export async function GET() {
       pendingApprovalsCount: 0,
       storageStats: {
         totalBytesUsed: 0,
-        quotaBytes: 1024 * 1024 * 1024,
+        quotaBytes: getStorageQuotaBytes(),
         uploadedCount: 0,
         zeroDiskCount: 0,
         provider: getActiveStorageProvider(),
@@ -332,11 +333,11 @@ export async function GET() {
       (p) => !p.claimedAt && p.expiresAt > now
     );
 
-    // Storage telemetry calculated across all non-archived organization assets (1 GB Free Tier quota)
+    // Storage telemetry calculated across all non-archived organization assets
     const uniqueStorageBytes = new Map<string, number>();
     let zeroDiskCount = 0;
     for (const asset of assetRows) {
-      if (asset.mediaType === "web_url" || asset.mediaType === "pdf" || asset.fileSizeBytes === 0) {
+      if (asset.mediaType === "web_url" || asset.fileSizeBytes === 0) {
         zeroDiskCount += 1;
       } else if (!uniqueStorageBytes.has(asset.storagePath)) {
         uniqueStorageBytes.set(asset.storagePath, asset.fileSizeBytes);
@@ -403,7 +404,7 @@ export async function GET() {
       })),
       storageStats: {
         totalBytesUsed,
-        quotaBytes: 1024 * 1024 * 1024, // 1 GB Supabase Free Tier
+        quotaBytes: getStorageQuotaBytes(),
         uploadedCount: uniqueStorageBytes.size,
         zeroDiskCount,
         provider: getActiveStorageProvider(),

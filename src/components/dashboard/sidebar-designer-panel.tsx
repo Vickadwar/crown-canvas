@@ -93,6 +93,7 @@ async function uploadOptimizedImage(
     error?: string;
     deduplicated?: boolean;
     signedUrl?: string;
+    uploadHeaders?: Record<string, string>;
     publicUrl?: string;
     storagePath?: string;
   };
@@ -103,7 +104,9 @@ async function uploadOptimizedImage(
   if (!urlJson.deduplicated && urlJson.signedUrl) {
     const putRes = await fetch(urlJson.signedUrl, {
       method: "PUT",
-      headers: { "Content-Type": uploadFile.type || "image/webp" },
+      headers: urlJson.uploadHeaders ?? {
+        "Content-Type": uploadFile.type || "image/webp",
+      },
       body: uploadFile,
     });
     if (!putRes.ok) {

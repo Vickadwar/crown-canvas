@@ -8,9 +8,9 @@ import { describe, it } from "node:test";
 import { computeVideoCompressionPlan } from "../video-compressor";
 
 describe("video-compressor plan", () => {
-  it("skips compression for already compact H.264 MP4 videos in auto_fit mode", () => {
+  it("skips compression for already compact <=10 MB H.264 MP4 videos in auto_fit mode", () => {
     const plan = computeVideoCompressionPlan({
-      fileSizeBytes: 12 * 1024 * 1024,
+      fileSizeBytes: 8 * 1024 * 1024,
       durationSeconds: 45,
       mimeType: "video/mp4",
       fileName: "promo-clean.mp4",
@@ -21,7 +21,7 @@ describe("video-compressor plan", () => {
     assert.equal(plan.shouldCompress, false);
   });
 
-  it("targets crisp 1080p ~38-42 MB output for a 332 MB 2-minute showroom video", () => {
+  it("targets crisp bandwidth-saving 1080p <=26 MB output for a 332 MB 2-minute showroom video", () => {
     const plan = computeVideoCompressionPlan({
       fileSizeBytes: 332 * 1024 * 1024,
       durationSeconds: 120,
@@ -35,8 +35,8 @@ describe("video-compressor plan", () => {
     assert.equal(plan.targetWidth, 1920);
     assert.equal(plan.targetHeight, 1080);
     assert.equal(plan.audioBitrate, 128_000);
-    assert.ok(plan.videoBitrate >= 2_200_000 && plan.videoBitrate <= 3_000_000);
-    assert.ok(plan.estimatedOutputMb <= 42);
+    assert.ok(plan.videoBitrate >= 1_350_000 && plan.videoBitrate <= 2_000_000);
+    assert.ok(plan.estimatedOutputMb <= 26);
   });
 
   it("preserves portrait 9:16 orientation with even H.264 dimensions", () => {

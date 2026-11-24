@@ -138,7 +138,9 @@ export async function DELETE(
     }
 
     if (deleted.storagePath) {
-      await purgeMediaObject(deleted.storagePath).catch(() => undefined);
+      await purgeMediaObject(deleted.storagePath, deleted.imageUrl).catch(
+        () => undefined
+      );
     }
 
     await Promise.all([

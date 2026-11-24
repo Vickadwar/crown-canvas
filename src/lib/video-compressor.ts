@@ -37,9 +37,11 @@ export interface VideoCompressionResult {
   savingsPercent: number;
 }
 
-const DEFAULT_MAX_UPLOAD_BYTES = 46 * 1024 * 1024; // 46 MB safety ceiling under 48 MB API cap
-const AUTO_FIT_TARGET_BYTES = 40 * 1024 * 1024; // 40 MB target budget to absorb VBR spikes
-const COMPACT_PASSTHROUGH_BYTES = 32 * 1024 * 1024; // Already compact MP4s upload directly
+const DEFAULT_MAX_UPLOAD_BYTES = 46 * 1024 * 1024; // 46 MB ceiling (keeps TV local caches fast)
+const AUTO_FIT_TARGET_BYTES = 24 * 1024 * 1024; // 24 MB signage budget (2x more videos fit in TV cache)
+const HIGH_1080P_TARGET_BYTES = 38 * 1024 * 1024; // 38 MB high-bitrate hero promos
+const BALANCED_720P_TARGET_BYTES = 14 * 1024 * 1024; // 14 MB ultra-compact TV clips
+const COMPACT_PASSTHROUGH_BYTES = 10 * 1024 * 1024; // Only truly compact <=10 MB MP4s skip compression
 
 let aacEncoderRegistered = false;
 
@@ -107,27 +109,33 @@ export function computeVideoCompressionPlan(params: {
   }
 
   const audioBitrate = duration > 240 ? 96_000 : 128_000;
+  const presetBudget =
+    preset === "high_1080p"
+      ? HIGH_1080P_TARGET_BYTES
+      : preset === "balanced_720p"
+        ? BALANCED_720P_TARGET_BYTES
+        : AUTO_FIT_TARGET_BYTES;
   const targetBudgetBytes = Math.min(
-    AUTO_FIT_TARGET_BYTES,
+    presetBudget,
     Math.round(maxUploadBytes * 0.87)
   );
   const totalBudgetBps = (targetBudgetBytes * 8) / duration;
   const rawVideoBps = Math.floor(totalBudgetBps - audioBitrate);
 
   let minVideoBps = 450_000;
-  let maxVideoBps = 3_200_000;
+  let maxVideoBps = 2_000_000; // Crisp 1080p signage bitrate (~15-20 MB for 2-min promos)
   if (preset === "high_1080p") {
     minVideoBps = 800_000;
-    maxVideoBps = 4_200_000;
+    maxVideoBps = 3_600_000;
   } else if (preset === "balanced_720p") {
-    minVideoBps = 450_000;
-    maxVideoBps = 1_900_000;
+    minVideoBps = 400_000;
+    maxVideoBps = 1_300_000;
   }
 
   const videoBitrate = Math.max(minVideoBps, Math.min(maxVideoBps, rawVideoBps));
 
   // Step down to 720p when bitrate per pixel would starve 1080p (typically > ~2.5 min clips)
-  const use720p = preset === "balanced_720p" || videoBitrate < 1_750_000;
+  const use720p = preset === "balanced_720p" || videoBitrate < 1_350_000;
   const fitted = fitDimensions(
     srcW,
     srcH,
