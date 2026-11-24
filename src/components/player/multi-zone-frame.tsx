@@ -113,9 +113,7 @@ export function MultiZoneFrame({
   sidebarConfig,
   sidebarProfile,
   showcaseProducts,
-  qrSignatures,
   screenId,
-  branchId,
 }: MultiZoneFrameProps) {
   const [weather, setWeather] = useState<EastAfricaWeather | null>(null);
   const [productIndex, setProductIndex] = useState(0);
@@ -209,21 +207,28 @@ export function MultiZoneFrame({
     sidebarConfig?.promoLabel?.trim() ||
     "Scan to browse Crown Decorative paints & shades.";
 
-  // Build HMAC-signed auto-tracked QR URL for full scan analytics attribution
+  // Build ultra-short, showroom-scannable QR URL (`/q/sb?s=<screenId>`).
+  // Destination URL & branch are resolved server-side from Postgres so the QR stays
+  // compact (~55 chars instead of 280+ chars) and scans effortlessly from 2-3 meters away.
+  const sidebarProfileId = sidebarProfile?.id;
   const qrValue = useMemo(() => {
     if (typeof window === "undefined") return qrDestination;
-    if (!screenId || !branchId) return qrDestination;
-    const params = new URLSearchParams({
-      s: screenId,
-      b: branchId,
-      src: "sidebar",
-      lbl: qrTitle,
-      to: qrDestination,
-    });
-    const sig = qrSignatures?.[`concierge|${qrDestination}`];
-    if (sig) params.set("sig", sig);
-    return `${window.location.origin}/q/concierge?${params.toString()}`;
-  }, [screenId, branchId, qrDestination, qrTitle, qrSignatures]);
+    if (!screenId) return qrDestination;
+    const isLocal =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    const configuredBase = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(
+      /\/+$/,
+      ""
+    );
+    const origin =
+      isLocal && configuredBase && !configuredBase.includes("localhost")
+        ? configuredBase
+        : window.location.origin;
+    const params = new URLSearchParams({ s: screenId });
+    if (sidebarProfileId) params.set("sp", sidebarProfileId);
+    return `${origin}/q/sb?${params.toString()}`;
+  }, [screenId, sidebarProfileId, qrDestination]);
 
   const qrDisplayHost = (() => {
     try {
@@ -318,7 +323,14 @@ export function MultiZoneFrame({
               className={`flex items-center gap-2.5 rounded-2xl border p-3 ${theme.qrCardBg}`}
             >
               <div className="shrink-0 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-2xs">
-                <QRCodeSVG value={qrValue} size={52} />
+                <QRCodeSVG
+                  value={qrValue}
+                  size={74}
+                  level="M"
+                  marginSize={2}
+                  bgColor="#ffffff"
+                  fgColor="#000000"
+                />
               </div>
               <div className="min-w-0">
                 <p className={`truncate text-[11px] font-bold ${theme.titleInk}`}>
@@ -432,19 +444,21 @@ export function MultiZoneFrame({
               </span>
             </div>
 
-            {/* Unobstructed Natural Aspect-Ratio Product Stage */}
-            <div className="relative my-2 flex min-h-0 flex-1 items-center justify-center overflow-hidden p-2">
+            {/* Unobstructed Straight Upright Uniform Product Stage (0deg, Natural Proportions) */}
+            <div className="relative my-2 flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl p-2">
               <div
-                className={`pointer-events-none absolute bottom-1 h-3.5 w-2/3 max-w-[160px] rounded-full blur-md ${isDarkTheme ? "bg-black/45" : "bg-zinc-900/12"
+                className={`pointer-events-none absolute bottom-1 h-3 w-3/5 max-w-[150px] rounded-full blur-md ${isDarkTheme ? "bg-black/45" : "bg-zinc-900/10"
                   }`}
               />
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                key={`hero-${currentProduct.id}`}
-                src={currentProduct.imageUrl}
-                alt={currentProduct.name}
-                className="animate-crown-slide relative z-10 h-auto max-h-full w-auto max-w-full object-contain drop-shadow-[0_14px_20px_rgba(15,23,42,0.2)] transition-transform duration-500"
-              />
+              <div className="relative z-10 flex aspect-square h-full max-h-[88%] max-w-[88%] items-center justify-center">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  key={`hero-${currentProduct.id}`}
+                  src={currentProduct.imageUrl}
+                  alt={currentProduct.name}
+                  className="animate-crown-slide h-full w-full object-contain object-center drop-shadow-[0_10px_18px_rgba(15,23,42,0.16)]"
+                />
+              </div>
             </div>
 
             {/* Product Name + Description + Sweep Progress */}
@@ -482,13 +496,20 @@ export function MultiZoneFrame({
           </div>
           )}
 
-          {/* 3. Auto-Tracked Signed QR Attribution Card */}
+          {/* 3. Ultra-Scannable Auto-Tracked QR Attribution Card */}
           {showQr && (
             <div
-              className={`flex shrink-0 items-center gap-3 rounded-2xl border p-2.5 xl:p-3 ${theme.qrCardBg}`}
+              className={`flex shrink-0 items-center gap-3 rounded-2xl border p-3 ${theme.qrCardBg}`}
             >
               <div className="shrink-0 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-2xs">
-                <QRCodeSVG value={qrValue} size={58} />
+                <QRCodeSVG
+                  value={qrValue}
+                  size={96}
+                  level="M"
+                  marginSize={2}
+                  bgColor="#ffffff"
+                  fgColor="#000000"
+                />
               </div>
               <div className="min-w-0">
                 <p

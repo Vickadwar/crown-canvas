@@ -82,6 +82,7 @@ export const emergencyOverrides = pgTable("emergency_overrides", {
   }),
   targetType: scheduleTargetEnum("target_type").default("global").notNull(),
   targetId: uuid("target_id"),
+  targetScreenIds: jsonb("target_screen_ids").$type<string[] | null>(),
   isActive: boolean("is_active").default(true).notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }),
   createdBy: uuid("created_by").references(() => users.id, {

@@ -25,7 +25,8 @@ const createOverrideSchema = z
       .enum(["global", "country", "branch", "screen", "screen_group", "screen_role"])
       .default("global"),
     targetId: z.string().uuid().nullable().optional(),
-    durationMinutes: z.number().int().min(1).max(10080).nullable().default(30),
+    targetScreenIds: z.array(z.string().uuid()).max(200).nullable().optional(),
+    durationMinutes: z.number().int().min(1).max(43200).nullable().default(30),
   })
   .superRefine((data, ctx) => {
     if (data.overrideKind === "alert" && data.message.trim().length < 2) {
@@ -114,7 +115,17 @@ export async function POST(request: Request) {
           targetId:
             parsed.data.targetType === "global"
               ? null
-              : (parsed.data.targetId ?? null),
+              : parsed.data.targetType === "screen" &&
+                  parsed.data.targetScreenIds &&
+                  parsed.data.targetScreenIds.length === 1
+                ? parsed.data.targetScreenIds[0]
+                : (parsed.data.targetId ?? null),
+          targetScreenIds:
+            parsed.data.targetType === "screen" &&
+            parsed.data.targetScreenIds &&
+            parsed.data.targetScreenIds.length > 0
+              ? parsed.data.targetScreenIds
+              : null,
           isActive: true,
           expiresAt,
           createdBy: session.userId,

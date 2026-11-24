@@ -26,6 +26,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import type {
+  BranchOperatingSchedule,
   LayoutZone,
   PlaylistSidebarConfig,
   QuickPostSlideConfig,
@@ -57,7 +58,7 @@ import {
   shouldUseVideoCrossOrigin,
   type TvDeviceProfile,
 } from "@/lib/player/tv-browser-compat";
-import { isWithinOperatingHours } from "@/lib/screen-health";
+import { evaluateOperatingStatus } from "@/lib/screen-health";
 import {
   createSupabaseBrowserClient,
   isSupabaseConfigured,
@@ -113,6 +114,7 @@ interface PlayerManifest {
     city: string;
     openingTime?: string;
     closingTime?: string;
+    operatingSchedule?: BranchOperatingSchedule | null;
   } | null;
   country: {
     id: string;
@@ -245,6 +247,7 @@ export function PlayerClient() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [standbyBypass, setStandbyBypass] = useState(false);
   const [isStandby, setIsStandby] = useState(false);
+  const [standbyReason, setStandbyReason] = useState<string>("");
   const [cursorHidden, setCursorHidden] = useState(false);
   const [remoteHudVisible, setRemoteHudVisible] = useState(false);
   const [showRemoteHint, setShowRemoteHint] = useState(false);
@@ -263,6 +266,7 @@ export function PlayerClient() {
   const branchHoursRef = useRef<{
     openingTime?: string;
     closingTime?: string;
+    operatingSchedule?: BranchOperatingSchedule | null;
   }>({});
 
   useEffect(() => {
@@ -270,11 +274,13 @@ export function PlayerClient() {
     branchHoursRef.current = {
       openingTime: manifest?.branch?.openingTime,
       closingTime: manifest?.branch?.closingTime,
+      operatingSchedule: manifest?.branch?.operatingSchedule ?? null,
     };
   }, [
     manifest?.country?.timezone,
     manifest?.branch?.openingTime,
     manifest?.branch?.closingTime,
+    manifest?.branch?.operatingSchedule,
   ]);
 
   // 1. Initialize stored device token, PWA Service Worker, clock, operating hours & Wake Lock
@@ -319,16 +325,20 @@ export function PlayerClient() {
 
     const clockInterval = setInterval(() => {
       setClockText(formatEastAfricaClock(timezoneRef.current));
-      const { openingTime, closingTime } = branchHoursRef.current;
-      if (openingTime && closingTime) {
-        const openNow = isWithinOperatingHours(
+      const { openingTime, closingTime, operatingSchedule } =
+        branchHoursRef.current;
+      if (operatingSchedule || (openingTime && closingTime)) {
+        const status = evaluateOperatingStatus({
           openingTime,
           closingTime,
-          timezoneRef.current || "Africa/Nairobi"
-        );
-        setIsStandby(!openNow);
+          operatingSchedule,
+          timezone: timezoneRef.current || "Africa/Nairobi",
+        });
+        setIsStandby(!status.isOpen);
+        setStandbyReason(status.reason);
       } else {
         setIsStandby(false);
+        setStandbyReason("");
       }
     }, 15_000);
 
@@ -646,13 +656,21 @@ export function PlayerClient() {
         setManifest(data);
         safeLocalSet(STORAGE_MANIFEST_KEY, JSON.stringify(data));
 
-        if (data.branch?.openingTime && data.branch?.closingTime) {
-          const openNow = isWithinOperatingHours(
-            data.branch.openingTime,
-            data.branch.closingTime,
-            data.country?.timezone || "Africa/Nairobi"
-          );
-          setIsStandby(!openNow);
+        if (
+          data.branch?.operatingSchedule ||
+          (data.branch?.openingTime && data.branch?.closingTime)
+        ) {
+          const status = evaluateOperatingStatus({
+            openingTime: data.branch.openingTime,
+            closingTime: data.branch.closingTime,
+            operatingSchedule: data.branch.operatingSchedule ?? null,
+            timezone: data.country?.timezone || "Africa/Nairobi",
+          });
+          setIsStandby(!status.isOpen);
+          setStandbyReason(status.reason);
+        } else {
+          setIsStandby(false);
+          setStandbyReason("");
         }
 
         const mediaRefs = data.items
@@ -1483,133 +1501,6 @@ export function PlayerClient() {
     );
   }
 
-  // Admin-Paused / Deactivated Screen Standby (retains pairing token; resumes within 2s on reactivate)
-  if (!demoMode && manifest?.screenPaused) {
-    return (
-      <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#09090b] p-12 text-center text-zinc-400 select-none">
-        <div className="mb-6 rounded-2xl bg-white px-5 py-2.5 shadow-lg">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={CROWN_OFFICIAL_LOGO_URL}
-            alt="Crown Paints"
-            className="h-10 w-auto object-contain"
-          />
-        </div>
-        <p className="font-mono text-6xl font-black tracking-tight text-zinc-200">
-          {clockText}
-        </p>
-        <p className="mt-4 text-base font-semibold text-zinc-300">
-          {manifest.screen.name} — Display Paused
-        </p>
-        <p className="mt-1 text-xs text-zinc-500">
-          Re-activate this screen in Fleet &amp; Pairing to resume playback immediately.
-        </p>
-      </div>
-    );
-  }
-
-  // Emergency Override Screen (Supports 3 Modes: Custom Alert, Media Clip Takeover, or Playlist Takeover)
-  if (
-    manifest?.emergencyOverride &&
-    manifest.emergencyOverride.overrideKind !== "playlist"
-  ) {
-    const ov = manifest.emergencyOverride;
-    const badgeColor =
-      ov.severity === "critical"
-        ? "bg-rose-600 text-white"
-        : ov.severity === "warning"
-          ? "bg-amber-500 text-zinc-950"
-          : "bg-blue-600 text-white";
-
-    if (ov.overrideKind === "media_asset" && ov.mediaAsset) {
-      return (
-        <div
-          ref={playerContainerRef}
-          className="relative h-screen w-screen overflow-hidden bg-black text-white select-none"
-        >
-          <div className="absolute left-5 top-5 z-30 flex items-center gap-2 rounded-full bg-black/75 px-3.5 py-1.5 backdrop-blur-md">
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${badgeColor}`}>
-              LIVE BROADCAST
-            </span>
-            <span className="text-xs font-semibold text-white">{ov.title}</span>
-          </div>
-          {ov.mediaAsset.mediaType === "video" ? (
-            <video
-              src={ov.mediaAsset.publicUrl}
-              className="h-full w-full bg-black object-contain"
-              autoPlay
-              loop
-              muted={isMuted}
-              playsInline
-            />
-          ) : ov.mediaAsset.mediaType === "web_url" ||
-            ov.mediaAsset.mediaType === "pdf" ? (
-            <iframe
-              src={ov.mediaAsset.publicUrl}
-              title={ov.title}
-              className="h-full w-full border-0 bg-white"
-              allow="autoplay; fullscreen"
-            />
-          ) : (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img
-              src={ov.mediaAsset.publicUrl}
-              alt={ov.title}
-              className="h-full w-full bg-black object-contain"
-            />
-          )}
-        </div>
-      );
-    }
-
-    const bg =
-      ov.severity === "critical"
-        ? "bg-rose-950 text-rose-50"
-        : ov.severity === "warning"
-          ? "bg-amber-950 text-amber-50"
-          : "bg-blue-950 text-blue-50";
-    return (
-      <div
-        className={`flex h-screen w-screen flex-col items-center justify-center p-16 text-center ${bg}`}
-      >
-        <span className={`mb-5 rounded-full px-4 py-1 text-xs font-bold uppercase tracking-widest ${badgeColor}`}>
-          EMERGENCY BROADCAST • {ov.severity}
-        </span>
-        <h1 className="max-w-4xl text-5xl font-black tracking-tight md:text-7xl">
-          {ov.title}
-        </h1>
-        {ov.message && (
-          <p className="mt-6 max-w-3xl text-2xl opacity-90">{ov.message}</p>
-        )}
-      </div>
-    );
-  }
-
-  // Eco-Standby Screen outside showroom operating hours (saves TV burn-in & power; bypassed during emergency alerts)
-  if (!demoMode && isStandby && !standbyBypass && manifest?.branch) {
-    return (
-      <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#02040a] p-12 text-center text-slate-400 select-none">
-        <p className="font-mono text-7xl font-black tracking-tight text-slate-200/80">
-          {clockText}
-        </p>
-        <p className="mt-4 text-lg font-semibold text-slate-300">
-          {manifest.branch.name} — Eco-Standby Mode
-        </p>
-        <p className="mt-1 text-sm text-slate-500">
-          Operating Hours: {manifest.branch.openingTime} –{" "}
-          {manifest.branch.closingTime} ({manifest.country?.timezone ?? "EAT"})
-        </p>
-        <button
-          type="button"
-          onClick={() => setStandbyBypass(true)}
-          className="mt-8 rounded-full border border-white/15 bg-white/5 px-5 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/15"
-        >
-          Wake Display (After-Hours Override)
-        </button>
-      </div>
-    );
-  }
-
   const slideDurationSec = Math.max(5, currentItem?.durationSeconds || 15);
   const isVideoSlide =
     currentItem?.kind === "media_asset" && currentItem.mediaType === "video";
@@ -1655,6 +1546,22 @@ export function PlayerClient() {
           transform: "translate(-50%, -50%) rotate(-90deg)",
         }
         : undefined;
+
+  const isScreenPaused = !demoMode && Boolean(manifest?.screenPaused);
+  const activeFullscreenBroadcast =
+    manifest?.emergencyOverride &&
+      manifest.emergencyOverride.overrideKind !== "playlist"
+      ? manifest.emergencyOverride
+      : null;
+  const isEcoStandby =
+    !demoMode &&
+    !isScreenPaused &&
+    !activeFullscreenBroadcast &&
+    isStandby &&
+    !standbyBypass &&
+    Boolean(manifest?.branch);
+  const isNormalPlayback =
+    !isScreenPaused && !activeFullscreenBroadcast && !isEcoStandby;
 
   const mainStageContent = !currentItem ? (
     <div className="flex h-full w-full flex-col items-center justify-center bg-[#060d1f] p-12 text-center">
@@ -1792,19 +1699,156 @@ export function PlayerClient() {
         }`}
     >
       {/* Dual-Buffer Next-Video Preloader (Mini PCs / Desktops only — disabled on Smart TVs to protect single hardware H.264 decoder) */}
-      {!tvProfile.singleVideoDecoder && nextIsVideo && nextPlaybackUrl && (
-        <video
-          key={`preload-${nextItem.id}`}
-          src={nextPlaybackUrl}
-          preload="auto"
-          muted
-          playsInline
-          aria-hidden="true"
-          className="pointer-events-none absolute -z-10 size-1 opacity-0"
-        />
-      )}
+      {isNormalPlayback &&
+        !tvProfile.singleVideoDecoder &&
+        nextIsVideo &&
+        nextPlaybackUrl && (
+          <video
+            key={`preload-${nextItem.id}`}
+            src={nextPlaybackUrl}
+            preload="auto"
+            muted
+            playsInline
+            aria-hidden="true"
+            className="pointer-events-none absolute -z-10 size-1 opacity-0"
+          />
+        )}
 
-      {hasMultiZoneLayout ? (
+      {/* Single Persistent Fullscreen Stage: Paused, Emergency Broadcast, Eco-Standby, and Normal Playback
+          all mount INSIDE playerContainerRef so triggering/stopping a broadcast NEVER exits browser Fullscreen */}
+      {isScreenPaused && manifest ? (
+        <div
+          onDoubleClick={toggleFullscreen}
+          className="flex h-full w-full flex-col items-center justify-center bg-[#09090b] p-12 text-center text-zinc-400 select-none"
+        >
+          <div className="mb-6 rounded-2xl bg-white px-5 py-2.5 shadow-lg">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={CROWN_OFFICIAL_LOGO_URL}
+              alt="Crown Paints"
+              className="h-10 w-auto object-contain"
+            />
+          </div>
+          <p className="font-mono text-6xl font-black tracking-tight text-zinc-200">
+            {clockText}
+          </p>
+          <p className="mt-4 text-base font-semibold text-zinc-300">
+            {manifest.screen.name} — Display Paused
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Re-activate this screen in Fleet &amp; Pairing to resume playback immediately.
+          </p>
+        </div>
+      ) : activeFullscreenBroadcast ? (
+        (() => {
+          const ov = activeFullscreenBroadcast;
+          const badgeColor =
+            ov.severity === "critical"
+              ? "bg-rose-600 text-white"
+              : ov.severity === "warning"
+                ? "bg-amber-500 text-zinc-950"
+                : "bg-blue-600 text-white";
+
+          if (ov.overrideKind === "media_asset" && ov.mediaAsset) {
+            return (
+              <div
+                onDoubleClick={toggleFullscreen}
+                className="relative h-full w-full overflow-hidden bg-black text-white select-none"
+              >
+                <div className="absolute left-5 top-5 z-30 flex items-center gap-2 rounded-full bg-black/75 px-3.5 py-1.5 backdrop-blur-md">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${badgeColor}`}
+                  >
+                    LIVE BROADCAST
+                  </span>
+                  <span className="text-xs font-semibold text-white">
+                    {ov.title}
+                  </span>
+                </div>
+                {ov.mediaAsset.mediaType === "video" ? (
+                  <video
+                    src={ov.mediaAsset.publicUrl}
+                    className="h-full w-full bg-black object-contain"
+                    autoPlay
+                    loop
+                    muted={isMuted || audioBlocked}
+                    playsInline
+                    disablePictureInPicture
+                    controlsList="nodownload nofullscreen"
+                    onContextMenu={(e) => e.preventDefault()}
+                  />
+                ) : ov.mediaAsset.mediaType === "web_url" ||
+                  ov.mediaAsset.mediaType === "pdf" ? (
+                  <iframe
+                    src={ov.mediaAsset.publicUrl}
+                    title={ov.title}
+                    className="h-full w-full border-0 bg-white"
+                    allow="autoplay; fullscreen"
+                  />
+                ) : (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={ov.mediaAsset.publicUrl}
+                    alt={ov.title}
+                    className="h-full w-full bg-black object-contain"
+                  />
+                )}
+              </div>
+            );
+          }
+
+          const bg =
+            ov.severity === "critical"
+              ? "bg-rose-950 text-rose-50"
+              : ov.severity === "warning"
+                ? "bg-amber-950 text-amber-50"
+                : "bg-blue-950 text-blue-50";
+          return (
+            <div
+              onDoubleClick={toggleFullscreen}
+              className={`flex h-full w-full flex-col items-center justify-center p-16 text-center ${bg}`}
+            >
+              <span
+                className={`mb-5 rounded-full px-4 py-1 text-xs font-bold uppercase tracking-widest ${badgeColor}`}
+              >
+                EMERGENCY BROADCAST • {ov.severity}
+              </span>
+              <h1 className="max-w-4xl text-5xl font-black tracking-tight md:text-7xl">
+                {ov.title}
+              </h1>
+              {ov.message && (
+                <p className="mt-6 max-w-3xl text-2xl opacity-90">
+                  {ov.message}
+                </p>
+              )}
+            </div>
+          );
+        })()
+      ) : isEcoStandby && manifest?.branch ? (
+        <div
+          onDoubleClick={toggleFullscreen}
+          className="flex h-full w-full flex-col items-center justify-center bg-[#02040a] p-12 text-center text-slate-400 select-none"
+        >
+          <p className="font-mono text-7xl font-black tracking-tight text-slate-200/80">
+            {clockText}
+          </p>
+          <p className="mt-4 text-lg font-semibold text-slate-300">
+            {manifest.branch.name} — Eco-Standby Mode
+          </p>
+          <p className="mt-1.5 text-sm text-slate-400">
+            {standbyReason ||
+              `Operating Hours: ${manifest.branch.openingTime} – ${manifest.branch.closingTime}`}{" "}
+            ({manifest.country?.timezone ?? "EAT"})
+          </p>
+          <button
+            type="button"
+            onClick={() => setStandbyBypass(true)}
+            className="mt-8 rounded-full border border-white/15 bg-white/5 px-5 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/15"
+          >
+            Wake Display (After-Hours Override)
+          </button>
+        </div>
+      ) : hasMultiZoneLayout ? (
         <MultiZoneFrame
           branchName={
             manifest?.branch?.name || "Nairobi Likoni Rd HQ & Showroom"

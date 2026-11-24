@@ -11,8 +11,28 @@ import {
   varchar,
   text,
   boolean,
+  jsonb,
   timestamp,
 } from "drizzle-orm/pg-core";
+
+export interface DayHoursRule {
+  open: boolean;
+  start: string; // "08:00"
+  end: string;   // "18:00"
+}
+
+export interface HolidayExceptionRule {
+  date: string; // "YYYY-MM-DD"
+  label: string;
+  mode: "closed" | "open_override";
+  start?: string;
+  end?: string;
+}
+
+export interface BranchOperatingSchedule {
+  days: Record<"0" | "1" | "2" | "3" | "4" | "5" | "6", DayHoursRule>; // 0=Sun..6=Sat
+  exceptions: HolidayExceptionRule[];
+}
 
 export const branchTypeEnum = pgEnum("branch_type", [
   "showroom",
@@ -55,6 +75,7 @@ export const branches = pgTable("branches", {
   phone: varchar("phone", { length: 40 }),
   openingTime: varchar("opening_time", { length: 5 }).default("08:00").notNull(),
   closingTime: varchar("closing_time", { length: 5 }).default("17:30").notNull(),
+  operatingSchedule: jsonb("operating_schedule").$type<BranchOperatingSchedule | null>(),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

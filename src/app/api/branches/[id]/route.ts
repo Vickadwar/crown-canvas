@@ -10,6 +10,28 @@ import { requireAdminAccess } from "@/lib/auth-guard";
 import { recordAuditLog } from "@/lib/audit";
 import { broadcastFleetSignal } from "@/lib/realtime";
 
+const dayHoursRuleSchema = z.object({
+  open: z.boolean(),
+  start: z.string().regex(/^\d{2}:\d{2}$/),
+  end: z.string().regex(/^\d{2}:\d{2}$/),
+});
+
+const holidayExceptionSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  label: z.string().min(1).max(100),
+  mode: z.enum(["closed", "open_override"]),
+  start: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  end: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+});
+
+const operatingScheduleSchema = z
+  .object({
+    days: z.record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), dayHoursRuleSchema),
+    exceptions: z.array(holidayExceptionSchema).max(60).default([]),
+  })
+  .nullable()
+  .optional();
+
 const patchBranchSchema = z.object({
   countryId: z.string().uuid().optional(),
   code: z
@@ -31,6 +53,7 @@ const patchBranchSchema = z.object({
     .string()
     .regex(/^\d{2}:\d{2}$/)
     .optional(),
+  operatingSchedule: operatingScheduleSchema,
   isActive: z.boolean().optional(),
 });
 

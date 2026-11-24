@@ -4,6 +4,7 @@
  */
 
 import type {
+  BranchOperatingSchedule,
   PlaylistSidebarConfig,
   QuickPostSlideConfig,
 } from "@/db/schema";
@@ -44,6 +45,7 @@ export interface BranchItem {
   phone?: string | null;
   openingTime: string;
   closingTime: string;
+  operatingSchedule?: BranchOperatingSchedule | null;
   isActive?: boolean;
 }
 
@@ -171,6 +173,7 @@ export interface OverrideItem {
   severity: "info" | "warning" | "critical";
   targetType: string;
   targetId?: string | null;
+  targetScreenIds?: string[] | null;
   isActive: boolean;
   expiresAt: string | null;
   createdAt?: string;

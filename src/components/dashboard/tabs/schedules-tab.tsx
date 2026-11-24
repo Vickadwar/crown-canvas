@@ -10,9 +10,11 @@ import { useMemo, useState } from "react";
 import {
   CalendarClock,
   Clock,
+  Edit3,
   PauseCircle,
   PlayCircle,
   Plus,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -46,9 +48,43 @@ const DAY_LABELS = [
   { idx: 0, short: "Sun" },
 ];
 
+const DAYPART_PRESETS = [
+  {
+    label: "Mon–Fri (08:00–18:00)",
+    days: [1, 2, 3, 4, 5],
+    start: "08:00",
+    end: "18:00",
+  },
+  {
+    label: "Saturday Half-Day (08:00–13:00)",
+    days: [6],
+    start: "08:00",
+    end: "13:00",
+  },
+  {
+    label: "Saturday Extended (08:00–14:00)",
+    days: [6],
+    start: "08:00",
+    end: "14:00",
+  },
+  {
+    label: "Morning Shift (08:00–12:00)",
+    days: [1, 2, 3, 4, 5, 6],
+    start: "08:00",
+    end: "12:00",
+  },
+  {
+    label: "Afternoon Shift (12:00–18:00)",
+    days: [1, 2, 3, 4, 5],
+    start: "12:00",
+    end: "18:00",
+  },
+];
+
 export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
   const confirm = useConfirm();
   const [showCreate, setShowCreate] = useState(data.schedules.length === 0);
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [playlistId, setPlaylistId] = useState(data.playlists[0]?.id ?? "");
   const [targetType, setTargetType] = useState<ScheduleItem["targetType"]>("global");
@@ -56,9 +92,40 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
   const [targetScreenRole, setTargetScreenRole] = useState("showroom_customer");
   const [priority, setPriority] = useState(20);
   const [daypartStart, setDaypartStart] = useState("08:00");
-  const [daypartEnd, setDaypartEnd] = useState("17:30");
-  const [daysOfWeek, setDaysOfWeek] = useState<number[]>([1, 2, 3, 4, 5, 6]);
+  const [daypartEnd, setDaypartEnd] = useState("18:00");
+  const [daysOfWeek, setDaysOfWeek] = useState<number[]>([1, 2, 3, 4, 5]);
   const [saving, setSaving] = useState(false);
+
+  function resetScheduleForm() {
+    setEditingScheduleId(null);
+    setName("");
+    setPlaylistId(data.playlists[0]?.id ?? "");
+    setTargetType("global");
+    setTargetId("");
+    setTargetScreenRole("showroom_customer");
+    setPriority(20);
+    setDaypartStart("08:00");
+    setDaypartEnd("18:00");
+    setDaysOfWeek([1, 2, 3, 4, 5]);
+  }
+
+  function startEditSchedule(sch: ScheduleItem) {
+    setEditingScheduleId(sch.id);
+    setName(sch.name);
+    setPlaylistId(sch.playlistId);
+    setTargetType(sch.targetType);
+    setTargetId(sch.targetId ?? "");
+    setTargetScreenRole(sch.targetScreenRole ?? "showroom_customer");
+    setPriority(sch.priority);
+    setDaypartStart(sch.daypartStart || "08:00");
+    setDaypartEnd(sch.daypartEnd || "18:00");
+    setDaysOfWeek(
+      sch.daysOfWeek && sch.daysOfWeek.length > 0
+        ? sch.daysOfWeek
+        : [1, 2, 3, 4, 5]
+    );
+    setShowCreate(true);
+  }
 
   const playlistById = useMemo(
     () => new Map(data.playlists.map((p) => [p.id, p])),
@@ -96,16 +163,24 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
     return s.targetType;
   }
 
-  async function handleCreate(e: React.FormEvent) {
+  async function handleSaveSchedule(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim() || !playlistId) {
       toast.error("Provide a schedule name and playlist.");
       return;
     }
+    if (daysOfWeek.length === 0) {
+      toast.error("Select at least one active day of the week.");
+      return;
+    }
     setSaving(true);
     try {
-      const res = await fetch("/api/schedules", {
-        method: "POST",
+      const url = editingScheduleId
+        ? `/api/schedules/${editingScheduleId}`
+        : "/api/schedules";
+      const method = editingScheduleId ? "PATCH" : "POST";
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: name.trim(),
@@ -125,11 +200,15 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
       });
       const j = await res.json();
       if (!res.ok) {
-        toast.error(j.error || "Could not create schedule");
+        toast.error(j.error || "Could not save schedule");
         return;
       }
-      toast.success(`Schedule "${name.trim()}" activated`);
-      setName("");
+      toast.success(
+        editingScheduleId
+          ? `Schedule "${name.trim()}" updated`
+          : `Schedule "${name.trim()}" activated`
+      );
+      resetScheduleForm();
       setShowCreate(false);
       await onRefresh();
     } finally {
@@ -184,27 +263,65 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
           </div>
           <Badge variant="info">{data.schedules.length} Rules</Badge>
         </div>
-        <Button size="sm" onClick={() => setShowCreate((v) => !v)}>
+        <Button
+          size="sm"
+          onClick={() => {
+            if (showCreate && editingScheduleId) {
+              resetScheduleForm();
+              return;
+            }
+            resetScheduleForm();
+            setShowCreate((v) => !v);
+          }}
+        >
           <Plus className="size-3.5" />
           New Schedule
         </Button>
       </div>
 
-      {/* Collapsible Create Form */}
+      {/* Collapsible Create / Edit Form */}
       {showCreate && (
         <Card className="border-blue-300">
           <CardHeader className="flex flex-row items-center justify-between pb-3">
-            <CardTitle className="text-base">Create Daypart Schedule</CardTitle>
+            <CardTitle className="text-base">
+              {editingScheduleId ? "Edit Daypart Schedule" : "Create Daypart Schedule"}
+            </CardTitle>
             <Button
               size="icon-xs"
               variant="ghost"
-              onClick={() => setShowCreate(false)}
+              onClick={() => {
+                resetScheduleForm();
+                setShowCreate(false);
+              }}
             >
               <X className="size-4" />
             </Button>
           </CardHeader>
-          <CardContent>
-            <form onSubmit={handleCreate} className="grid gap-4 md:grid-cols-12">
+          <CardContent className="space-y-4">
+            {/* 1-Click Daypart Presets */}
+            <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-zinc-200/80 bg-zinc-50 px-3 py-2">
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-zinc-600">
+                <Sparkles className="size-3 text-blue-600" />
+                Quick Presets:
+              </span>
+              {DAYPART_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => {
+                    setDaysOfWeek(preset.days);
+                    setDaypartStart(preset.start);
+                    setDaypartEnd(preset.end);
+                    if (!name.trim()) setName(preset.label);
+                  }}
+                  className="rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] font-semibold text-zinc-700 transition hover:border-blue-400 hover:text-blue-700"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={handleSaveSchedule} className="grid gap-4 md:grid-cols-12">
               <div className="space-y-1 md:col-span-4">
                 <Label className="text-xs">Schedule Name</Label>
                 <Input
@@ -368,8 +485,8 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
                           )
                         }
                         className={`rounded-md px-2 py-1 text-[11px] font-medium transition ${active
-                            ? "bg-zinc-950 text-white"
-                            : "border border-zinc-200 bg-white text-zinc-500"
+                          ? "bg-zinc-950 text-white"
+                          : "border border-zinc-200 bg-white text-zinc-500"
                           }`}
                       >
                         {d.short}
@@ -384,13 +501,20 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => setShowCreate(false)}
+                  onClick={() => {
+                    resetScheduleForm();
+                    setShowCreate(false);
+                  }}
                 >
                   Cancel
                 </Button>
                 <Button type="submit" size="sm" disabled={saving}>
                   <CalendarClock className="size-3.5" />
-                  {saving ? "Saving..." : "Activate Schedule"}
+                  {saving
+                    ? "Saving..."
+                    : editingScheduleId
+                      ? "Update Schedule"
+                      : "Activate Schedule"}
                 </Button>
               </div>
             </form>
@@ -438,6 +562,14 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
                       <Button
                         size="icon-xs"
                         variant="ghost"
+                        title="Edit Schedule"
+                        onClick={() => startEditSchedule(sch)}
+                      >
+                        <Edit3 className="size-3.5 text-blue-600" />
+                      </Button>
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
                         title={sch.isActive ? "Pause Schedule" : "Resume Schedule"}
                         onClick={() => void handleToggle(sch)}
                       >
@@ -473,8 +605,8 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
                         <span
                           key={d.idx}
                           className={`rounded px-2 py-0.5 text-[10px] font-medium ${on
-                              ? "bg-zinc-900 text-white"
-                              : "bg-zinc-100 text-zinc-400"
+                            ? "bg-zinc-900 text-white"
+                            : "bg-zinc-100 text-zinc-400"
                             }`}
                         >
                           {d.short}

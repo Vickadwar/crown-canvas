@@ -9,6 +9,8 @@
 
 import { useMemo, useState } from "react";
 import {
+  CalendarOff,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -19,10 +21,17 @@ import {
   PlayCircle,
   Plus,
   Search,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import type {
+  BranchOperatingSchedule,
+  DayHoursRule,
+  HolidayExceptionRule,
+} from "@/db/schema";
+import { STANDARD_RETAIL_SCHEDULE } from "@/lib/screen-health";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,6 +50,94 @@ import type { BranchItem, OverviewPayload } from "../cms-types";
 interface ShowroomsTabProps {
   data: OverviewPayload;
   onRefresh: () => Promise<void>;
+}
+
+const WEEKDAY_ROWS: Array<{
+  key: "0" | "1" | "2" | "3" | "4" | "5" | "6";
+  label: string;
+  short: string;
+}> = [
+    { key: "1", label: "Monday", short: "Mon" },
+    { key: "2", label: "Tuesday", short: "Tue" },
+    { key: "3", label: "Wednesday", short: "Wed" },
+    { key: "4", label: "Thursday", short: "Thu" },
+    { key: "5", label: "Friday", short: "Fri" },
+    { key: "6", label: "Saturday", short: "Sat" },
+    { key: "0", label: "Sunday", short: "Sun" },
+  ];
+
+function cloneSchedule(
+  source?: BranchOperatingSchedule | null,
+  fallbackOpen = "08:00",
+  fallbackClose = "18:00"
+): BranchOperatingSchedule {
+  if (source?.days) {
+    return {
+      days: {
+        "0": { ...(source.days["0"] ?? STANDARD_RETAIL_SCHEDULE.days["0"]) },
+        "1": { ...(source.days["1"] ?? { open: true, start: fallbackOpen, end: fallbackClose }) },
+        "2": { ...(source.days["2"] ?? { open: true, start: fallbackOpen, end: fallbackClose }) },
+        "3": { ...(source.days["3"] ?? { open: true, start: fallbackOpen, end: fallbackClose }) },
+        "4": { ...(source.days["4"] ?? { open: true, start: fallbackOpen, end: fallbackClose }) },
+        "5": { ...(source.days["5"] ?? { open: true, start: fallbackOpen, end: fallbackClose }) },
+        "6": { ...(source.days["6"] ?? STANDARD_RETAIL_SCHEDULE.days["6"]) },
+      },
+      exceptions: (source.exceptions ?? []).map((ex) => ({ ...ex })),
+    };
+  }
+  return {
+    days: {
+      "0": { open: false, start: "09:00", end: "13:00" },
+      "1": { open: true, start: fallbackOpen, end: fallbackClose },
+      "2": { open: true, start: fallbackOpen, end: fallbackClose },
+      "3": { open: true, start: fallbackOpen, end: fallbackClose },
+      "4": { open: true, start: fallbackOpen, end: fallbackClose },
+      "5": { open: true, start: fallbackOpen, end: fallbackClose },
+      "6": { open: true, start: "08:00", end: "13:00" },
+    },
+    exceptions: [],
+  };
+}
+
+function buildStandardPublicHolidays(year: number): HolidayExceptionRule[] {
+  return [
+    { date: `${year}-01-01`, label: "New Year's Day", mode: "closed" },
+    { date: `${year}-05-01`, label: "Labour Day", mode: "closed" },
+    { date: `${year}-06-01`, label: "Madaraka Day", mode: "closed" },
+    { date: `${year}-10-20`, label: "Mashujaa Day", mode: "closed" },
+    { date: `${year}-12-12`, label: "Jamhuri Day", mode: "closed" },
+    { date: `${year}-12-25`, label: "Christmas Day", mode: "closed" },
+    { date: `${year}-12-26`, label: "Boxing Day", mode: "closed" },
+  ];
+}
+
+function formatOperatingSummary(b: BranchItem): {
+  primary: string;
+  secondary?: string;
+} {
+  const sched = b.operatingSchedule;
+  if (!sched?.days) {
+    return { primary: `${b.openingTime} – ${b.closingTime}` };
+  }
+  const mon = sched.days["1"];
+  const sat = sched.days["6"];
+  const sun = sched.days["0"];
+  const parts: string[] = [];
+  if (mon?.open) {
+    parts.push(`Mon–Fri ${mon.start}–${mon.end}`);
+  } else {
+    parts.push("Mon–Fri Custom");
+  }
+  parts.push(sat?.open ? `Sat ${sat.start}–${sat.end}` : "Sat Off");
+  parts.push(sun?.open ? `Sun ${sun.start}–${sun.end}` : "Sun Off");
+  const holidayCount = sched.exceptions?.length ?? 0;
+  return {
+    primary: parts.join(" • "),
+    secondary:
+      holidayCount > 0
+        ? `${holidayCount} holiday/date rule${holidayCount === 1 ? "" : "s"}`
+        : undefined,
+  };
 }
 
 const BRANCH_TYPE_BADGE: Record<
@@ -73,7 +170,15 @@ export function ShowroomsTab({ data, onRefresh }: ShowroomsTabProps) {
   const [city, setCity] = useState("");
   const [branchType, setBranchType] = useState<BranchItem["branchType"]>("showroom");
   const [openingTime, setOpeningTime] = useState("08:00");
-  const [closingTime, setClosingTime] = useState("17:30");
+  const [closingTime, setClosingTime] = useState("18:00");
+  const [operatingSchedule, setOperatingSchedule] =
+    useState<BranchOperatingSchedule>(() => cloneSchedule(null, "08:00", "18:00"));
+  const [showWeeklyEditor, setShowWeeklyEditor] = useState(true);
+  const [newExDate, setNewExDate] = useState("");
+  const [newExLabel, setNewExLabel] = useState("");
+  const [newExMode, setNewExMode] = useState<"closed" | "open_override">("closed");
+  const [newExStart, setNewExStart] = useState("09:00");
+  const [newExEnd, setNewExEnd] = useState("14:00");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [saving, setSaving] = useState(false);
@@ -121,7 +226,12 @@ export function ShowroomsTab({ data, onRefresh }: ShowroomsTabProps) {
     setCity("");
     setBranchType("showroom");
     setOpeningTime("08:00");
-    setClosingTime("17:30");
+    setClosingTime("18:00");
+    setOperatingSchedule(cloneSchedule(null, "08:00", "18:00"));
+    setShowWeeklyEditor(true);
+    setNewExDate("");
+    setNewExLabel("");
+    setNewExMode("closed");
     setPhone("");
     setAddress("");
   }
@@ -134,10 +244,132 @@ export function ShowroomsTab({ data, onRefresh }: ShowroomsTabProps) {
     setName(b.name);
     setCity(b.city);
     setBranchType(b.branchType);
-    setOpeningTime(b.openingTime || "08:00");
-    setClosingTime(b.closingTime || "17:30");
+    const openT = b.openingTime || "08:00";
+    const closeT = b.closingTime || "18:00";
+    setOpeningTime(openT);
+    setClosingTime(closeT);
+    setOperatingSchedule(cloneSchedule(b.operatingSchedule, openT, closeT));
+    setShowWeeklyEditor(true);
     setPhone(b.phone ?? "");
     setAddress(b.address ?? "");
+  }
+
+  function updateDayRule(
+    dayKey: "0" | "1" | "2" | "3" | "4" | "5" | "6",
+    patch: Partial<DayHoursRule>
+  ) {
+    setOperatingSchedule((prev) => {
+      const nextDays = {
+        ...prev.days,
+        [dayKey]: { ...prev.days[dayKey], ...patch },
+      };
+      if (dayKey === "1") {
+        if (patch.start) setOpeningTime(patch.start);
+        if (patch.end) setClosingTime(patch.end);
+      }
+      return { ...prev, days: nextDays };
+    });
+  }
+
+  function applySchedulePreset(preset: "sat13" | "sat14" | "always") {
+    if (preset === "always") {
+      setOpeningTime("00:00");
+      setClosingTime("23:59");
+      setOperatingSchedule((prev) => ({
+        ...prev,
+        days: {
+          "0": { open: true, start: "00:00", end: "23:59" },
+          "1": { open: true, start: "00:00", end: "23:59" },
+          "2": { open: true, start: "00:00", end: "23:59" },
+          "3": { open: true, start: "00:00", end: "23:59" },
+          "4": { open: true, start: "00:00", end: "23:59" },
+          "5": { open: true, start: "00:00", end: "23:59" },
+          "6": { open: true, start: "00:00", end: "23:59" },
+        },
+      }));
+      return;
+    }
+    const satEnd = preset === "sat14" ? "14:00" : "13:00";
+    setOpeningTime("08:00");
+    setClosingTime("18:00");
+    setOperatingSchedule((prev) => ({
+      ...prev,
+      days: {
+        "0": { open: false, start: "09:00", end: "13:00" },
+        "1": { open: true, start: "08:00", end: "18:00" },
+        "2": { open: true, start: "08:00", end: "18:00" },
+        "3": { open: true, start: "08:00", end: "18:00" },
+        "4": { open: true, start: "08:00", end: "18:00" },
+        "5": { open: true, start: "08:00", end: "18:00" },
+        "6": { open: true, start: "08:00", end: satEnd },
+      },
+    }));
+  }
+
+  function handleLoadPublicHolidays() {
+    const year = new Date().getFullYear();
+    const defaults = buildStandardPublicHolidays(year);
+    setOperatingSchedule((prev) => {
+      const existingByDate = new Map(
+        (prev.exceptions ?? []).map((ex) => [ex.date, ex])
+      );
+      for (const h of defaults) {
+        if (!existingByDate.has(h.date)) {
+          existingByDate.set(h.date, h);
+        }
+      }
+      return {
+        ...prev,
+        exceptions: Array.from(existingByDate.values()).sort((a, b) =>
+          a.date.localeCompare(b.date)
+        ),
+      };
+    });
+    toast.success(`Loaded standard ${year} public holidays (closed by default)`);
+  }
+
+  function handleAddException() {
+    if (!newExDate || !newExLabel.trim()) {
+      toast.error("Select a date and enter a holiday or event label.");
+      return;
+    }
+    const entry: HolidayExceptionRule = {
+      date: newExDate,
+      label: newExLabel.trim(),
+      mode: newExMode,
+      ...(newExMode === "open_override"
+        ? { start: newExStart || "09:00", end: newExEnd || "14:00" }
+        : {}),
+    };
+    setOperatingSchedule((prev) => {
+      const others = (prev.exceptions ?? []).filter((x) => x.date !== entry.date);
+      return {
+        ...prev,
+        exceptions: [...others, entry].sort((a, b) => a.date.localeCompare(b.date)),
+      };
+    });
+    setNewExDate("");
+    setNewExLabel("");
+  }
+
+  function handleToggleExceptionMode(date: string) {
+    setOperatingSchedule((prev) => ({
+      ...prev,
+      exceptions: (prev.exceptions ?? []).map((ex) =>
+        ex.date === date
+          ? ex.mode === "closed"
+            ? { ...ex, mode: "open_override", start: ex.start || "09:00", end: ex.end || "14:00" }
+            : { date: ex.date, label: ex.label, mode: "closed" }
+          : ex
+      ),
+    }));
+  }
+
+  function handleRemoveException(date: string) {
+    setOperatingSchedule((prev) => ({
+      ...prev,
+      exceptions: (prev.exceptions ?? []).filter((ex) => ex.date !== date),
+    }));
   }
 
   async function handleSaveBranch(e: React.FormEvent) {
@@ -161,8 +393,9 @@ export function ShowroomsTab({ data, onRefresh }: ShowroomsTabProps) {
           name: name.trim(),
           city: city.trim(),
           branchType,
-          openingTime,
-          closingTime,
+          openingTime: operatingSchedule.days["1"]?.start || openingTime,
+          closingTime: operatingSchedule.days["1"]?.end || closingTime,
+          operatingSchedule,
           phone: phone.trim() || undefined,
           address: address.trim() || undefined,
         }),
@@ -523,7 +756,251 @@ export function ShowroomsTab({ data, onRefresh }: ShowroomsTabProps) {
                   onChange={(e) => setPhone(e.target.value)}
                 />
               </div>
-              <div className="flex items-end justify-end gap-2">
+
+              {/* Weekly Operating Hours & Public Holidays Editor */}
+              <div className="rounded-xl border border-zinc-200 bg-zinc-50/70 p-3.5 md:col-span-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowWeeklyEditor((v) => !v)}
+                    className="flex items-center gap-2 text-left text-xs font-semibold text-zinc-900"
+                  >
+                    <Clock className="size-3.5 text-blue-600" />
+                    <span>Weekly Operating Hours &amp; Public Holidays (Eco-Standby)</span>
+                    <ChevronDown
+                      className={`size-3.5 text-zinc-400 transition-transform ${showWeeklyEditor ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => applySchedulePreset("sat13")}
+                      className="rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] font-semibold text-zinc-700 transition hover:border-blue-400 hover:text-blue-700"
+                    >
+                      Mon–Fri 8–6, Sat 8–1, Sun Off
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applySchedulePreset("sat14")}
+                      className="rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] font-semibold text-zinc-700 transition hover:border-blue-400 hover:text-blue-700"
+                    >
+                      Mon–Fri 8–6, Sat 8–2, Sun Off
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applySchedulePreset("always")}
+                      className="rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] font-semibold text-zinc-700 transition hover:border-blue-400 hover:text-blue-700"
+                    >
+                      24/7 Always On
+                    </button>
+                  </div>
+                </div>
+
+                {showWeeklyEditor && (
+                  <div className="mt-3 grid gap-4 lg:grid-cols-2">
+                    {/* Per-Day Grid */}
+                    <div className="space-y-1.5 rounded-lg border border-zinc-200/80 bg-white p-2.5">
+                      <p className="text-[11px] font-semibold text-zinc-700">
+                        Per-Day Schedule (Displays enter Eco-Standby outside these windows)
+                      </p>
+                      <div className="divide-y divide-zinc-100">
+                        {WEEKDAY_ROWS.map((row) => {
+                          const rule = operatingSchedule.days[row.key] ?? {
+                            open: row.key !== "0",
+                            start: "08:00",
+                            end: row.key === "6" ? "13:00" : "18:00",
+                          };
+                          return (
+                            <div
+                              key={row.key}
+                              className="flex items-center justify-between gap-2 py-1.5"
+                            >
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateDayRule(row.key, { open: !rule.open })
+                                  }
+                                  className={`w-16 rounded-md px-2 py-0.5 text-[10px] font-semibold transition ${rule.open
+                                      ? "bg-emerald-600 text-white"
+                                      : "bg-zinc-200 text-zinc-600"
+                                    }`}
+                                >
+                                  {rule.open ? "Open" : "Closed"}
+                                </button>
+                                <span className="w-20 text-xs font-medium text-zinc-800">
+                                  {row.label}
+                                </span>
+                              </div>
+                              {rule.open ? (
+                                <div className="flex items-center gap-1.5">
+                                  <Input
+                                    type="time"
+                                    className="h-7 w-28 text-[11px]"
+                                    value={rule.start}
+                                    onChange={(e) =>
+                                      updateDayRule(row.key, { start: e.target.value })
+                                    }
+                                  />
+                                  <span className="text-[11px] text-zinc-400">to</span>
+                                  <Input
+                                    type="time"
+                                    className="h-7 w-28 text-[11px]"
+                                    value={rule.end}
+                                    onChange={(e) =>
+                                      updateDayRule(row.key, { end: e.target.value })
+                                    }
+                                  />
+                                </div>
+                              ) : (
+                                <span className="text-[11px] italic text-zinc-400">
+                                  Closed all day (Eco-Standby)
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Public Holidays & Special Opening Overrides */}
+                    <div className="flex flex-col justify-between space-y-2.5 rounded-lg border border-zinc-200/80 bg-white p-2.5">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-700">
+                            <CalendarOff className="size-3.5 text-rose-500" />
+                            Public Holidays &amp; Special Date Overrides
+                          </p>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            onClick={handleLoadPublicHolidays}
+                          >
+                            <Sparkles className="size-3 text-amber-500" />
+                            Load Public Holidays
+                          </Button>
+                        </div>
+
+                        <div className="grid grid-cols-12 gap-1.5">
+                          <Input
+                            type="date"
+                            className="col-span-4 h-7 text-[11px]"
+                            value={newExDate}
+                            onChange={(e) => setNewExDate(e.target.value)}
+                          />
+                          <Input
+                            className="col-span-5 h-7 text-[11px]"
+                            placeholder="Holiday or Event name..."
+                            value={newExLabel}
+                            onChange={(e) => setNewExLabel(e.target.value)}
+                          />
+                          <select
+                            value={newExMode}
+                            onChange={(e) =>
+                              setNewExMode(
+                                e.target.value as "closed" | "open_override"
+                              )
+                            }
+                            className="col-span-3 h-7 rounded-md border border-zinc-200 bg-white px-1.5 text-[11px] text-zinc-800"
+                          >
+                            <option value="closed">Closed</option>
+                            <option value="open_override">Special Open</option>
+                          </select>
+                          {newExMode === "open_override" && (
+                            <div className="col-span-9 flex items-center gap-1.5">
+                              <span className="text-[10px] text-zinc-500">
+                                Override Hours:
+                              </span>
+                              <Input
+                                type="time"
+                                className="h-7 w-28 text-[11px]"
+                                value={newExStart}
+                                onChange={(e) => setNewExStart(e.target.value)}
+                              />
+                              <span className="text-[10px] text-zinc-400">to</span>
+                              <Input
+                                type="time"
+                                className="h-7 w-28 text-[11px]"
+                                value={newExEnd}
+                                onChange={(e) => setNewExEnd(e.target.value)}
+                              />
+                            </div>
+                          )}
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="secondary"
+                            onClick={handleAddException}
+                            className={
+                              newExMode === "open_override"
+                                ? "col-span-3"
+                                : "col-span-12"
+                            }
+                          >
+                            <Plus className="size-3" />
+                            Add Date Rule
+                          </Button>
+                        </div>
+
+                        <div className="max-h-40 space-y-1 overflow-y-auto pr-1">
+                          {(operatingSchedule.exceptions ?? []).length === 0 ? (
+                            <p className="py-3 text-center text-[11px] text-zinc-400">
+                              No public holidays or special dates added yet. Click{" "}
+                              <strong>Load Public Holidays</strong> to auto-populate closed dates.
+                            </p>
+                          ) : (
+                            (operatingSchedule.exceptions ?? []).map((ex) => (
+                              <div
+                                key={ex.date}
+                                className="flex items-center justify-between gap-2 rounded-md border border-zinc-100 bg-zinc-50 px-2 py-1 text-[11px]"
+                              >
+                                <div className="min-w-0">
+                                  <span className="font-mono font-semibold text-zinc-700">
+                                    {ex.date}
+                                  </span>{" "}
+                                  <span className="truncate text-zinc-600">
+                                    — {ex.label}
+                                  </span>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleExceptionMode(ex.date)}
+                                    title="Click to toggle Closed / Special Open Override"
+                                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${ex.mode === "closed"
+                                        ? "bg-rose-100 text-rose-700"
+                                        : "bg-emerald-100 text-emerald-700"
+                                      }`}
+                                  >
+                                    {ex.mode === "closed"
+                                      ? "Closed"
+                                      : `Open ${ex.start ?? "09:00"}–${ex.end ?? "14:00"}`}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveException(ex.date)}
+                                    className="rounded p-0.5 text-zinc-400 hover:bg-zinc-200 hover:text-rose-600"
+                                  >
+                                    <X className="size-3" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-zinc-500">
+                        Tip: Click any holiday badge to switch it between{" "}
+                        <strong>Closed</strong> and <strong>Special Open Override</strong>{" "}
+                        (e.g., if opening on a Sunday or holiday).
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-end justify-end gap-2 md:col-span-4">
                 <Button
                   type="button"
                   size="sm"
@@ -607,11 +1084,23 @@ export function ShowroomsTab({ data, onRefresh }: ShowroomsTabProps) {
                           {region ? `${region.name} (${region.code})` : "Global"}
                         </p>
                       </td>
-                      <td className="px-4 py-3 font-mono text-[11px] text-zinc-600">
-                        <span className="inline-flex items-center gap-1">
-                          <Clock className="size-3 text-zinc-400" />
-                          {b.openingTime} – {b.closingTime}
-                        </span>
+                      <td className="px-4 py-3 text-[11px] text-zinc-600">
+                        {(() => {
+                          const summary = formatOperatingSummary(b);
+                          return (
+                            <div>
+                              <span className="inline-flex items-center gap-1 font-mono">
+                                <Clock className="size-3 shrink-0 text-zinc-400" />
+                                {summary.primary}
+                              </span>
+                              {summary.secondary && (
+                                <p className="mt-0.5 text-[10px] text-zinc-400">
+                                  {summary.secondary}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant="outline">{screenCount} TVs</Badge>

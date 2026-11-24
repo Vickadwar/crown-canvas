@@ -2,8 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   computeScreenHealth,
+  evaluateOperatingStatus,
   isWithinOperatingHours,
+  STANDARD_RETAIL_SCHEDULE,
 } from "../screen-health";
+import type { BranchOperatingSchedule } from "@/db/schema/locations";
 import {
   inspectVideoForAndroidTv,
   normalizeExternalMediaUrl,
@@ -43,6 +46,81 @@ test("isWithinOperatingHours evaluates showroom opening & closing windows in EAT
     isWithinOperatingHours("08:00", "17:30", "Africa/Nairobi", evening),
     false
   );
+});
+
+test("evaluateOperatingStatus enforces Mon-Fri 08:00-18:00, Sat 08:00-13:00, Sun Closed, and Public Holiday overrides", () => {
+  const schedule: BranchOperatingSchedule = {
+    days: { ...STANDARD_RETAIL_SCHEDULE.days },
+    exceptions: [
+      { date: "2026-12-12", label: "Jamhuri Day", mode: "closed" },
+      {
+        date: "2026-11-22",
+        label: "Special Sunday Expo",
+        mode: "open_override",
+        start: "10:00",
+        end: "15:00",
+      },
+    ],
+  };
+
+  // Friday 2026-11-20 17:30 EAT (14:30Z) -> Open (Mon-Fri 08:00-18:00)
+  const friLate = evaluateOperatingStatus({
+    operatingSchedule: schedule,
+    timezone: "Africa/Nairobi",
+    now: new Date("2026-11-20T14:30:00Z"),
+  });
+  assert.equal(friLate.isOpen, true);
+
+  // Saturday 2026-11-21 12:30 EAT (09:30Z) -> Open (Sat 08:00-13:00)
+  const satMidday = evaluateOperatingStatus({
+    operatingSchedule: schedule,
+    timezone: "Africa/Nairobi",
+    now: new Date("2026-11-21T09:30:00Z"),
+  });
+  assert.equal(satMidday.isOpen, true);
+
+  // Saturday 2026-11-21 13:30 EAT (10:30Z) -> Closed (after 13:00 Sat close)
+  const satAfternoon = evaluateOperatingStatus({
+    operatingSchedule: schedule,
+    timezone: "Africa/Nairobi",
+    now: new Date("2026-11-21T10:30:00Z"),
+  });
+  assert.equal(satAfternoon.isOpen, false);
+
+  // Normal Sunday 2026-11-29 11:00 EAT (08:00Z) -> Closed by default
+  const normalSunday = evaluateOperatingStatus({
+    operatingSchedule: schedule,
+    timezone: "Africa/Nairobi",
+    now: new Date("2026-11-29T08:00:00Z"),
+  });
+  assert.equal(normalSunday.isOpen, false);
+  assert.match(normalSunday.reason, /Sunday/i);
+
+  // Public Holiday Saturday 2026-12-12 10:00 EAT (07:00Z) -> Closed for Jamhuri Day
+  const holiday = evaluateOperatingStatus({
+    operatingSchedule: schedule,
+    timezone: "Africa/Nairobi",
+    now: new Date("2026-12-12T07:00:00Z"),
+  });
+  assert.equal(holiday.isOpen, false);
+  assert.match(holiday.reason, /Jamhuri Day/);
+
+  // Sunday Open Override 2026-11-22 12:00 EAT (09:00Z) -> Open during 10:00-15:00
+  const openSunday = evaluateOperatingStatus({
+    operatingSchedule: schedule,
+    timezone: "Africa/Nairobi",
+    now: new Date("2026-11-22T09:00:00Z"),
+  });
+  assert.equal(openSunday.isOpen, true);
+  assert.match(openSunday.reason, /Special Sunday Expo/);
+
+  // Sunday Open Override 2026-11-22 16:00 EAT (13:00Z) -> Closed after 15:00
+  const openSundayAfter = evaluateOperatingStatus({
+    operatingSchedule: schedule,
+    timezone: "Africa/Nairobi",
+    now: new Date("2026-11-22T13:00:00Z"),
+  });
+  assert.equal(openSundayAfter.isOpen, false);
 });
 
 test("normalizeExternalMediaUrl converts YouTube, Canva, Google Slides, and PDF links to zero-disk embeds", () => {

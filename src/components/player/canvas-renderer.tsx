@@ -151,10 +151,7 @@ interface CanvasRendererProps {
 export function CanvasRenderer({
   doc,
   screenId,
-  branchId,
   quickPostId,
-  slideTitle,
-  qrSignatures,
   interactive = false,
   selectedId = null,
   zoom = "fit",
@@ -383,23 +380,23 @@ export function CanvasRenderer({
     window.addEventListener("pointerup", onUp);
   }
 
-  function buildQrValue(rawUrl?: string, qrLabel?: string): string {
+  function buildQrValue(rawUrl?: string, qrIndex = 0): string {
     const target = rawUrl?.trim() || "https://www.crownpaints.co.ke";
-    if (!screenId || !branchId || typeof window === "undefined") return target;
-    const shortCode = quickPostId ? quickPostId.slice(0, 32) : "studio";
-    const params = new URLSearchParams({
-      s: screenId,
-      b: branchId,
-      src: "studio_slide",
-      lbl: (qrLabel?.trim() || slideTitle?.trim() || "Studio Slide QR").slice(0, 120),
-      to: target,
-    });
-    if (quickPostId) params.set("p", quickPostId);
-    const sig =
-      qrSignatures?.[`${shortCode}|${target}`] ??
-      qrSignatures?.[`studio|${target}`];
-    if (sig) params.set("sig", sig);
-    return `${window.location.origin}/q/${encodeURIComponent(shortCode)}?${params.toString()}`;
+    if (!screenId || !quickPostId || typeof window === "undefined") return target;
+    const isLocal =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    const configuredBase = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(
+      /\/+$/,
+      ""
+    );
+    const origin =
+      isLocal && configuredBase && !configuredBase.includes("localhost")
+        ? configuredBase
+        : window.location.origin;
+    const params = new URLSearchParams({ p: quickPostId, s: screenId });
+    if (qrIndex > 0) params.set("i", String(qrIndex));
+    return `${origin}/q/sl?${params.toString()}`;
   }
 
   function renderShapeBody(el: StudioCanvasElement) {
@@ -1181,7 +1178,12 @@ export function CanvasRenderer({
           </div>
         );
 
-      case "qr":
+      case "qr": {
+        const qrElements = doc.elements.filter((item) => item.type === "qr");
+        const qrIndex = Math.max(
+          0,
+          qrElements.findIndex((item) => item.id === el.id)
+        );
         return (
           <div
             className="flex h-full w-full flex-col items-center justify-center gap-4 rounded-[24px] border p-5 text-center shadow-lg"
@@ -1191,7 +1193,14 @@ export function CanvasRenderer({
             }}
           >
             <div className="rounded-[18px] bg-white p-4 shadow-sm">
-              <QRCodeSVG value={buildQrValue(el.qrUrl, el.qrLabel)} size={200} />
+              <QRCodeSVG
+                value={buildQrValue(el.qrUrl, qrIndex)}
+                size={200}
+                level="M"
+                marginSize={2}
+                bgColor="#ffffff"
+                fgColor="#000000"
+              />
             </div>
             <p
               className="truncate font-bold"
@@ -1205,6 +1214,7 @@ export function CanvasRenderer({
             </p>
           </div>
         );
+      }
     }
   }
 

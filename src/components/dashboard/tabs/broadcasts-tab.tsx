@@ -55,8 +55,23 @@ export function BroadcastsTab({ data, onRefresh }: BroadcastsTabProps) {
     "global" | "branch" | "screen_group" | "screen"
   >("global");
   const [targetId, setTargetId] = useState("");
+  const [targetScreenIds, setTargetScreenIds] = useState<string[]>([]);
+  const [screenSearch, setScreenSearch] = useState("");
   const [durationMinutes, setDurationMinutes] = useState("30");
+  const [customDurationValue, setCustomDurationValue] = useState("45");
+  const [customDurationUnit, setCustomDurationUnit] = useState<
+    "minutes" | "hours" | "days"
+  >("minutes");
   const [sending, setSending] = useState(false);
+
+  const screenById = useMemo(
+    () => new Map(data.screens.map((s) => [s.id, s])),
+    [data.screens]
+  );
+  const branchById = useMemo(
+    () => new Map(data.branches.map((b) => [b.id, b])),
+    [data.branches]
+  );
 
   const mediaById = useMemo(
     () => new Map(data.mediaAssets.map((m) => [m.id, m])),
@@ -104,6 +119,25 @@ export function BroadcastsTab({ data, onRefresh }: BroadcastsTabProps) {
       return;
     }
 
+    if (targetType === "screen" && targetScreenIds.length === 0) {
+      toast.error("Select at least one display to target.");
+      return;
+    }
+
+    let computedMinutes: number | null = null;
+    if (durationMinutes === "custom") {
+      const val = Math.max(1, Number(customDurationValue) || 1);
+      const mult =
+        customDurationUnit === "days"
+          ? 1440
+          : customDurationUnit === "hours"
+            ? 60
+            : 1;
+      computedMinutes = Math.min(43200, Math.round(val * mult));
+    } else if (durationMinutes !== "0") {
+      computedMinutes = Number(durationMinutes) || 30;
+    }
+
     setSending(true);
     try {
       const res = await fetch("/api/overrides", {
@@ -117,9 +151,15 @@ export function BroadcastsTab({ data, onRefresh }: BroadcastsTabProps) {
           playlistId: overrideKind === "playlist" ? playlistId : null,
           severity,
           targetType,
-          targetId: targetType === "global" ? null : targetId || null,
-          durationMinutes:
-            durationMinutes === "0" ? null : Number(durationMinutes) || 30,
+          targetId:
+            targetType === "global" || targetType === "screen"
+              ? targetType === "screen" && targetScreenIds.length === 1
+                ? targetScreenIds[0]
+                : null
+              : targetId || null,
+          targetScreenIds:
+            targetType === "screen" ? targetScreenIds : null,
+          durationMinutes: computedMinutes,
         }),
       });
       const j = await res.json();
@@ -218,8 +258,19 @@ export function BroadcastsTab({ data, onRefresh }: BroadcastsTabProps) {
                         ? `Running playlist: ${playlistById.get(ov.playlistId)?.name ?? "Playlist"}`
                         : ov.message}
                     {" • "}
+                    {ov.targetType === "screen" &&
+                      Array.isArray(ov.targetScreenIds) &&
+                      ov.targetScreenIds.length > 0
+                      ? `Targets: ${ov.targetScreenIds
+                        .map((id) => screenById.get(id)?.name ?? "Display")
+                        .slice(0, 3)
+                        .join(", ")}${ov.targetScreenIds.length > 3 ? ` +${ov.targetScreenIds.length - 3} more` : ""}`
+                      : ov.targetType === "global"
+                        ? "All Paired Displays"
+                        : `Target: ${ov.targetType}`}
+                    {" • "}
                     {ov.expiresAt
-                      ? `Expires ${new Date(ov.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                      ? `Expires ${new Date(ov.expiresAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
                       : "Active until manually cleared"}
                   </p>
                 </div>
@@ -270,11 +321,10 @@ export function BroadcastsTab({ data, onRefresh }: BroadcastsTabProps) {
                     key={m.id}
                     type="button"
                     onClick={() => setOverrideKind(m.id)}
-                    className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                      active
+                    className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${active
                         ? "bg-zinc-950 text-white shadow-2xs"
                         : "text-zinc-600 hover:bg-white hover:text-zinc-950"
-                    }`}
+                      }`}
                   >
                     <Icon className="size-3.5" />
                     {m.label}
@@ -379,9 +429,9 @@ export function BroadcastsTab({ data, onRefresh }: BroadcastsTabProps) {
                     }}
                     options={[
                       { value: "global", label: "All Paired Displays" },
+                      { value: "screen", label: "Specific Displays (Multi-Select)" },
                       { value: "branch", label: "Specific Location" },
                       { value: "screen_group", label: "Screen Group" },
-                      { value: "screen", label: "Single Display" },
                     ]}
                   />
                 </div>
@@ -414,20 +464,6 @@ export function BroadcastsTab({ data, onRefresh }: BroadcastsTabProps) {
                     />
                   </div>
                 )}
-                {targetType === "screen" && (
-                  <div className="space-y-1">
-                    <Label className="text-xs">Display</Label>
-                    <ModernSelect
-                      size="sm"
-                      value={targetId}
-                      onValueChange={setTargetId}
-                      options={data.screens.map((s) => ({
-                        value: s.id,
-                        label: s.name,
-                      }))}
-                    />
-                  </div>
-                )}
 
                 <div className="space-y-1">
                   <Label className="text-xs">Auto-Expire After</Label>
@@ -440,11 +476,131 @@ export function BroadcastsTab({ data, onRefresh }: BroadcastsTabProps) {
                       { value: "30", label: "30 Minutes" },
                       { value: "60", label: "1 Hour" },
                       { value: "240", label: "4 Hours" },
+                      { value: "custom", label: "Custom Duration..." },
                       { value: "0", label: "Until Manually Cleared" },
                     ]}
                   />
                 </div>
               </div>
+
+              {/* Custom Expiry Duration Controls */}
+              {durationMinutes === "custom" && (
+                <div className="grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50/70 p-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Custom Duration Value</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={customDurationUnit === "days" ? 30 : customDurationUnit === "hours" ? 720 : 43200}
+                      className="h-8 bg-white text-xs"
+                      value={customDurationValue}
+                      onChange={(e) => setCustomDurationValue(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Unit</Label>
+                    <ModernSelect
+                      size="sm"
+                      value={customDurationUnit}
+                      onValueChange={(v) =>
+                        setCustomDurationUnit(v as "minutes" | "hours" | "days")
+                      }
+                      options={[
+                        { value: "minutes", label: "Minutes" },
+                        { value: "hours", label: "Hours" },
+                        { value: "days", label: "Days (up to 30)" },
+                      ]}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Multi-Screen Target Picker */}
+              {targetType === "screen" && (
+                <div className="space-y-2.5 rounded-xl border border-zinc-200 bg-zinc-50/70 p-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Label className="text-xs font-semibold text-zinc-800">
+                      Select Specific Displays ({targetScreenIds.length} selected)
+                    </Label>
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        className="h-7 w-40 bg-white text-xs"
+                        placeholder="Filter screens..."
+                        value={screenSearch}
+                        onChange={(e) => setScreenSearch(e.target.value)}
+                      />
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        onClick={() =>
+                          setTargetScreenIds(data.screens.map((s) => s.id))
+                        }
+                      >
+                        All
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => setTargetScreenIds([])}
+                      >
+                        Clear
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="grid max-h-44 gap-1.5 overflow-y-auto sm:grid-cols-2">
+                    {data.screens
+                      .filter((s) => {
+                        const q = screenSearch.trim().toLowerCase();
+                        if (!q) return true;
+                        const bName = branchById.get(s.branchId)?.name ?? "";
+                        return (
+                          s.name.toLowerCase().includes(q) ||
+                          bName.toLowerCase().includes(q)
+                        );
+                      })
+                      .map((s) => {
+                        const checked = targetScreenIds.includes(s.id);
+                        const br = branchById.get(s.branchId);
+                        return (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() =>
+                              setTargetScreenIds((prev) =>
+                                checked
+                                  ? prev.filter((id) => id !== s.id)
+                                  : [...prev, s.id]
+                              )
+                            }
+                            className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-left text-xs transition ${checked
+                                ? "border-rose-500 bg-rose-50/70 text-rose-950"
+                                : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300"
+                              }`}
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold">{s.name}</p>
+                              <p className="truncate text-[10px] text-zinc-500">
+                                {br?.name ?? "Location"} •{" "}
+                                {s.isOnline ? "Online" : "Offline"}
+                              </p>
+                            </div>
+                            <span
+                              className={`flex size-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${checked
+                                  ? "border-rose-600 bg-rose-600 text-white"
+                                  : "border-zinc-300 bg-white"
+                                }`}
+                            >
+                              {checked ? "✓" : ""}
+                            </span>
+                          </button>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
 
               <Button
                 type="submit"

@@ -131,21 +131,22 @@ export function QuickPostSlide({
 
   const qrDestination = (() => {
     if (!config.qrUrl) return "";
-    if (!screenId || !branchId || typeof window === "undefined") {
+    if (!screenId || !quickPostId || typeof window === "undefined") {
       return config.qrUrl;
     }
-    const shortCode = quickPostId ? quickPostId.slice(0, 32) : "slide";
-    const params = new URLSearchParams({
-      s: screenId,
-      b: branchId,
-      src: "quick_post",
-      lbl: (config.qrLabel || title || "Slide QR").slice(0, 120),
-      to: config.qrUrl,
-    });
-    if (quickPostId) params.set("p", quickPostId);
-    const sig = qrSignatures?.[`${shortCode}|${config.qrUrl}`];
-    if (sig) params.set("sig", sig);
-    return `${window.location.origin}/q/${encodeURIComponent(shortCode)}?${params.toString()}`;
+    const isLocal =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    const configuredBase = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(
+      /\/+$/,
+      ""
+    );
+    const origin =
+      isLocal && configuredBase && !configuredBase.includes("localhost")
+        ? configuredBase
+        : window.location.origin;
+    const params = new URLSearchParams({ p: quickPostId, s: screenId });
+    return `${origin}/q/sl?${params.toString()}`;
   })();
 
   return (
@@ -391,6 +392,9 @@ export function QuickPostSlide({
                     value={qrDestination || config.qrUrl}
                     size={compact ? 84 : 188}
                     level="M"
+                    marginSize={2}
+                    bgColor="#ffffff"
+                    fgColor="#000000"
                   />
                 </div>
                 <span

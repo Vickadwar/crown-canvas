@@ -41,7 +41,7 @@ import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { CROWN_DECORATIVE_QR_URL } from "@/lib/crown-products";
-import { optimizeImageForSignage } from "@/lib/media-optimizer";
+import { normalizeProductImageForSidebar } from "@/lib/media-optimizer";
 import type {
   OverviewPayload,
   ShowcaseProductItem,
@@ -74,7 +74,7 @@ async function uploadOptimizedImage(
   rawFile: File,
   departmentCode: string
 ): Promise<{ publicUrl: string; storagePath: string }> {
-  const optimized = await optimizeImageForSignage(rawFile);
+  const optimized = await normalizeProductImageForSidebar(rawFile);
   const uploadFile = optimized.file;
   const sha256Checksum = await computeSha256(uploadFile);
 
@@ -172,7 +172,7 @@ export function SidebarProfilesPanel({
   );
   const [promoLabel, setPromoLabel] = useState(
     initialEditProfile?.promoLabel ??
-      "Scan to browse Crown Decorative paints & shades."
+    "Scan to browse Crown Decorative paints & shades."
   );
   const [qrTargetUrl, setQrTargetUrl] = useState(
     initialEditProfile?.qrTargetUrl ?? CROWN_DECORATIVE_QR_URL
@@ -498,11 +498,10 @@ export function SidebarProfilesPanel({
                               : [...prev, prod.id]
                           );
                         }}
-                        className={`flex items-center gap-2.5 rounded-lg border p-2 text-left text-xs transition ${
-                          selected
+                        className={`flex items-center gap-2.5 rounded-lg border p-2 text-left text-xs transition ${selected
                             ? "border-zinc-950 bg-white ring-1 ring-zinc-950"
                             : "border-zinc-200 bg-white/80 hover:border-zinc-400"
-                        }`}
+                          }`}
                       >
                         <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-zinc-50 p-1">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -575,9 +574,8 @@ export function SidebarProfilesPanel({
                     <div className="min-w-0 space-y-1">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span
-                          className={`size-3 rounded-full border ${
-                            THEME_SWATCH[p.theme] ?? "bg-white border-zinc-300"
-                          }`}
+                          className={`size-3 rounded-full border ${THEME_SWATCH[p.theme] ?? "bg-white border-zinc-300"
+                            }`}
                         />
                         <CardTitle className="truncate text-sm">{p.name}</CardTitle>
                         {p.isDefault && (
@@ -1035,9 +1033,8 @@ export function ShowcaseProductsPanel({
           return (
             <Card
               key={prod.id}
-              className={`flex flex-col border-zinc-200 bg-white transition ${
-                !prod.isActive ? "opacity-60" : ""
-              } ${isBusy ? "pointer-events-none opacity-70" : ""}`}
+              className={`flex flex-col border-zinc-200 bg-white transition ${!prod.isActive ? "opacity-60" : ""
+                } ${isBusy ? "pointer-events-none opacity-70" : ""}`}
             >
               <CardContent className="flex flex-1 flex-col justify-between gap-3 p-3.5">
                 <div>

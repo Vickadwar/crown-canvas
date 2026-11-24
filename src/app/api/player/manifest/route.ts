@@ -106,7 +106,14 @@ export async function GET(request: Request) {
         ov.targetId === screen.groupId
       )
         return true;
-      if (ov.targetType === "screen" && ov.targetId === screen.id) return true;
+      if (
+        ov.targetType === "screen" &&
+        (ov.targetId === screen.id ||
+          (Array.isArray(ov.targetScreenIds) &&
+            ov.targetScreenIds.includes(screen.id)))
+      ) {
+        return true;
+      }
       return false;
     });
 
@@ -399,6 +406,7 @@ export async function GET(request: Request) {
             city: branch.city,
             openingTime: branch.openingTime,
             closingTime: branch.closingTime,
+            operatingSchedule: branch.operatingSchedule ?? null,
           }
         : null,
       country: country

@@ -241,3 +241,121 @@ export async function optimizeImageForSignage(file: File): Promise<{
     return { file, savedBytes: 0 };
   }
 }
+
+/**
+ * Normalizes uploaded Sidebar Showcase Product photos onto a uniform 800x800 crisp WebP
+ * canvas (zero stretching, zero distortion, zero cropping):
+ * - For transparent PNG/WebP packshots: automatically trims excess empty alpha margins
+ *   and centers the product upright with consistent 6% breathing padding.
+ * - For opaque photos (JPG): preserves full natural aspect ratio centered cleanly at high
+ *   sharpness inside the uniform optical square so all sidebar products match visually.
+ */
+export async function normalizeProductImageForSidebar(file: File): Promise<{
+  file: File;
+  savedBytes: number;
+  width?: number;
+  height?: number;
+}> {
+  if (
+    typeof document === "undefined" ||
+    !file.type.startsWith("image/") ||
+    file.type === "image/svg+xml" ||
+    file.type === "image/gif"
+  ) {
+    return { file, savedBytes: 0 };
+  }
+
+  try {
+    const bitmap = await createImageBitmap(file);
+    const srcW = bitmap.width;
+    const srcH = bitmap.height;
+
+    // Inspect alpha bounding box on a quick analysis canvas (capped at 1000px for speed)
+    const probeScale = Math.min(1, 1000 / Math.max(srcW, srcH));
+    const probeW = Math.max(1, Math.round(srcW * probeScale));
+    const probeH = Math.max(1, Math.round(srcH * probeScale));
+    const probeCanvas = document.createElement("canvas");
+    probeCanvas.width = probeW;
+    probeCanvas.height = probeH;
+    const probeCtx = probeCanvas.getContext("2d");
+
+    let cropX = 0;
+    let cropY = 0;
+    let cropW = srcW;
+    let cropH = srcH;
+
+    if (probeCtx) {
+      probeCtx.drawImage(bitmap, 0, 0, probeW, probeH);
+      const pixels = probeCtx.getImageData(0, 0, probeW, probeH).data;
+      let minX = probeW;
+      let minY = probeH;
+      let maxX = -1;
+      let maxY = -1;
+      let hasTransparency = false;
+
+      for (let y = 0; y < probeH; y++) {
+        for (let x = 0; x < probeW; x++) {
+          const alpha = pixels[(y * probeW + x) * 4 + 3];
+          if (alpha < 245) hasTransparency = true;
+          if (alpha > 16) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      // Only trim empty margins when the image actually uses alpha transparency
+      if (hasTransparency && maxX > minX && maxY > minY) {
+        cropX = Math.max(0, Math.floor(minX / probeScale));
+        cropY = Math.max(0, Math.floor(minY / probeScale));
+        cropW = Math.min(srcW - cropX, Math.ceil((maxX - minX + 1) / probeScale));
+        cropH = Math.min(srcH - cropY, Math.ceil((maxY - minY + 1) / probeScale));
+      }
+    }
+
+    // Place trimmed/natural image centered upright inside a uniform 800x800 transparent square
+    const outSize = 800;
+    const pad = Math.round(outSize * 0.06); // 6% uniform breathing margin
+    const avail = outSize - pad * 2;
+    const fitScale = Math.min(avail / cropW, avail / cropH);
+    const drawW = Math.max(1, Math.round(cropW * fitScale));
+    const drawH = Math.max(1, Math.round(cropH * fitScale));
+    const dx = Math.round((outSize - drawW) / 2);
+    const dy = Math.round((outSize - drawH) / 2);
+
+    const outCanvas = document.createElement("canvas");
+    outCanvas.width = outSize;
+    outCanvas.height = outSize;
+    const outCtx = outCanvas.getContext("2d");
+    if (!outCtx) {
+      bitmap.close();
+      return optimizeImageForSignage(file);
+    }
+    outCtx.imageSmoothingEnabled = true;
+    outCtx.imageSmoothingQuality = "high";
+    outCtx.drawImage(bitmap, cropX, cropY, cropW, cropH, dx, dy, drawW, drawH);
+    bitmap.close();
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      outCanvas.toBlob((b) => resolve(b), "image/webp", 0.9)
+    );
+    if (!blob) {
+      return optimizeImageForSignage(file);
+    }
+
+    const baseName = file.name.replace(/\.[^.]+$/, "");
+    const normalized = new File([blob], `${baseName}.webp`, {
+      type: "image/webp",
+    });
+    return {
+      file: normalized,
+      savedBytes: Math.max(0, file.size - normalized.size),
+      width: outSize,
+      height: outSize,
+    };
+  } catch {
+    return optimizeImageForSignage(file);
+  }
+}

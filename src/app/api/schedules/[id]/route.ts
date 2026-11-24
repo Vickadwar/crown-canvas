@@ -5,6 +5,17 @@ import { broadcastFleetSignal } from "@/lib/realtime";
 import { requireAdminAccess } from "@/lib/auth-guard";
 
 const patchSchema = z.object({
+  name: z.string().min(2).max(160).optional(),
+  playlistId: z.string().uuid().optional(),
+  targetType: z
+    .enum(["global", "country", "branch", "screen_group", "screen", "screen_role"])
+    .optional(),
+  targetId: z.string().uuid().nullable().optional(),
+  targetScreenRole: z
+    .enum(["showroom_customer", "back_office", "factory_floor", "reception"])
+    .nullable()
+    .optional(),
+  daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).optional(),
   isActive: z.boolean().optional(),
   priority: z.number().int().min(1).max(1000).optional(),
   daypartStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),

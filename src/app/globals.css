@@ -180,34 +180,28 @@
 @keyframes crown-product-stage {
   0% {
     opacity: 0;
-    transform: translate3d(34px, 18px, 0) rotate(11deg) scale(0.84);
-  }
-  65% {
-    opacity: 1;
-    transform: translate3d(-4px, -4px, 0) rotate(-7deg) scale(1.02);
+    transform: translate3d(0, 12px, 0) scale(0.96);
   }
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) rotate(-5deg) scale(1);
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 
 @keyframes crown-product-float {
   0%,
   100% {
-    transform: translate3d(0, 0, 0) rotate(-5deg);
+    transform: translate3d(0, 0, 0);
   }
   50% {
-    transform: translate3d(0, -6px, 0) rotate(-3deg);
+    transform: translate3d(0, -4px, 0);
   }
 }
 
 .animate-crown-product-hero {
   will-change: transform, opacity;
   backface-visibility: hidden;
-  animation:
-    crown-product-stage 0.72s cubic-bezier(0.16, 1, 0.3, 1) both,
-    crown-product-float 4.2s ease-in-out 0.72s infinite;
+  animation: crown-product-stage 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* Hide idle mouse / Smart TV pointer on /player */
