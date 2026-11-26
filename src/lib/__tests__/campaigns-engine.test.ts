@@ -11,8 +11,10 @@ import {
   chunkRecognitionsIntoWallPages,
   getStableSlideContentKey,
   interleavePlaybackItems,
+  matchesPromotionForScreen,
   matchesScreenTarget,
   resolveActiveRotationStep,
+  resolveEffectivePromoCadence,
   resolvePreservedSlideIndex,
   type ScheduleRecord,
 } from "../schedule-resolver";
@@ -254,4 +256,75 @@ test("resolvePreservedSlideIndex keeps currently playing video uninterrupted whe
     resolvePreservedSlideIndex(republishedQueue, "old-row-uuid-99", 0, playingKey),
     2
   );
+});
+
+test("matchesPromotionForScreen honors explicit targetPlaylistIds on any TV playing that playlist while enforcing expiry", () => {
+  const homeTvCtx = {
+    screenId: "home-tv-2",
+    branchId: "br-home",
+    countryId: "ke",
+    groupId: null,
+    screenRole: "showroom_customer",
+    timezone: "Africa/Nairobi",
+  };
+  const now = new Date("2026-11-26T12:00:00Z");
+
+  // Promo originally targeted screen-1 ONLY, but was later embedded into playlist-B:
+  // Home TV playing playlist-B MUST display it!
+  assert.equal(
+    matchesPromotionForScreen(
+      {
+        targetType: "screen",
+        targetId: "screen-1",
+        targetScreenIds: ["screen-1"],
+        targetPlaylistIds: ["playlist-B"],
+        startDate: "2026-11-01T00:00:00Z",
+        endDate: "2026-12-01T00:00:00Z",
+        isActive: true,
+      },
+      homeTvCtx,
+      { activePlaylistId: "playlist-B", now }
+    ),
+    true
+  );
+
+  // Home TV playing playlist-A (not embedded) must NOT display it
+  assert.equal(
+    matchesPromotionForScreen(
+      {
+        targetType: "screen",
+        targetId: "screen-1",
+        targetScreenIds: ["screen-1"],
+        targetPlaylistIds: ["playlist-B"],
+        isActive: true,
+      },
+      homeTvCtx,
+      { activePlaylistId: "playlist-A", now }
+    ),
+    false
+  );
+
+  // Expired embedded promo must still stop airing
+  assert.equal(
+    matchesPromotionForScreen(
+      {
+        targetType: "global",
+        targetId: null,
+        targetPlaylistIds: ["playlist-B"],
+        endDate: "2026-11-20T00:00:00Z",
+        isActive: true,
+      },
+      homeTvCtx,
+      { activePlaylistId: "playlist-B", now }
+    ),
+    false
+  );
+});
+
+test("resolveEffectivePromoCadence auto-interleaves every 3 slides by default (0) and respects explicit block (-1)", () => {
+  assert.equal(resolveEffectivePromoCadence(0, true), 3);
+  assert.equal(resolveEffectivePromoCadence(null, true), 3);
+  assert.equal(resolveEffectivePromoCadence(5, true), 5);
+  assert.equal(resolveEffectivePromoCadence(-1, true), 0);
+  assert.equal(resolveEffectivePromoCadence(0, false), 0);
 });

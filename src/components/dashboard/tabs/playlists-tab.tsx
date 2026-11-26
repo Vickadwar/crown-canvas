@@ -830,17 +830,18 @@ export function PlaylistsTab({
                         onValueChange={(v) =>
                           void handlePatchPlaylist(
                             activePlaylist.id,
-                            { promoInjectEveryN: Number(v) || 0 },
+                            { promoInjectEveryN: Number(v) },
                             "Updated promotion ad-break cadence & pushed to TVs"
                           )
                         }
                         options={[
-                          { value: "0", label: "Off (Playlist Only)" },
+                          { value: "0", label: "Auto (1 Promo / 3 slides)" },
                           { value: "2", label: "1 Promo / 2 slides" },
                           { value: "3", label: "1 Promo / 3 slides" },
                           { value: "4", label: "1 Promo / 4 slides" },
                           { value: "5", label: "1 Promo / 5 slides" },
                           { value: "6", label: "1 Promo / 6 slides" },
+                          { value: "-1", label: "Off (Block Promotions)" },
                         ]}
                       />
                     </div>

@@ -192,26 +192,34 @@ export function TickerBar({
   return (
     <footer
       className={`relative flex shrink-0 items-center overflow-hidden border-t border-zinc-200 bg-white ${
-        compact ? "h-14" : "h-16"
+        compact
+          ? "h-[clamp(38px,5.2vh,54px)]"
+          : "h-[clamp(42px,5.8vh,62px)]"
       }`}
     >
       <div
         className={`z-10 flex h-full shrink-0 items-center border-r border-zinc-200 bg-white ${
-          compact ? "px-4" : "px-5"
+          compact ? "px-3" : "px-[clamp(10px,1.3vw,20px)]"
         }`}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={CROWN_OFFICIAL_LOGO_URL}
           alt="Crown Paints"
-          className={compact ? "h-10 w-auto object-contain" : "h-12 w-auto object-contain"}
+          className={
+            compact
+              ? "h-[clamp(24px,3.6vh,38px)] w-auto object-contain"
+              : "h-[clamp(26px,4.1vh,46px)] w-auto object-contain"
+          }
         />
       </div>
 
       <div className="min-w-0 flex-1 overflow-hidden">
         <div
-          className={`animate-crown-ticker items-center gap-12 px-6 font-semibold text-zinc-900 ${
-            compact ? "text-xs" : "text-[15px]"
+          className={`animate-crown-ticker items-center gap-[clamp(24px,3vw,48px)] px-[clamp(12px,1.5vw,24px)] font-semibold text-zinc-900 ${
+            compact
+              ? "text-[clamp(11px,1.35vh,13px)]"
+              : "text-[clamp(12px,1.55vh,15px)]"
           }`}
         >
           {[...items, ...items].map((item, i) => (
@@ -268,10 +276,10 @@ export function TickerBar({
                 title={partner.name}
                 className={`flex items-center justify-center rounded-lg border border-zinc-200/80 bg-white px-2 shadow-2xs ${
                   rightRailWidthClass
-                    ? "h-11 min-w-0 flex-1 max-w-[172px]"
+                    ? "h-[clamp(28px,4.1vh,44px)] min-w-0 flex-1 max-w-[172px]"
                     : compact
-                      ? "h-9 w-[92px]"
-                      : "h-11 w-[112px]"
+                      ? "h-[clamp(26px,3.6vh,36px)] w-[clamp(70px,7vw,92px)]"
+                      : "h-[clamp(28px,4.1vh,44px)] w-[clamp(78px,8vw,112px)]"
                 }`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -280,8 +288,8 @@ export function TickerBar({
                   alt={partner.name}
                   className={
                     compact
-                      ? "h-6 w-auto max-w-[78px] object-contain"
-                      : "h-8 w-auto max-w-full object-contain"
+                      ? "h-[clamp(18px,2.5vh,26px)] w-auto max-w-[78px] object-contain"
+                      : "h-[clamp(20px,2.9vh,32px)] w-auto max-w-full object-contain"
                   }
                 />
               </div>

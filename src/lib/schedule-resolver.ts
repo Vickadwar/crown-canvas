@@ -96,6 +96,68 @@ export function matchesScreenTarget(
 }
 
 /**
+ * Evaluates whether an active Promotion should air on a given display.
+ * When `targetPlaylistIds` explicitly embeds the Promotion into specific playlists,
+ * ANY screen currently playing one of those playlists receives the Promotion (still
+ * enforcing `isActive` and `startDate`/`endDate` expiry) — avoiding the trap where
+ * an older narrow screen target silently hides a newly embedded playlist promotion.
+ */
+export function matchesPromotionForScreen(
+  promo: TargetableCampaign & { targetPlaylistIds?: string[] | null },
+  ctx: SchedulableScreenContext,
+  options: {
+    activePlaylistId?: string | null;
+    isDedicatedPromotionsStep?: boolean;
+    now?: Date;
+  } = {}
+): boolean {
+  const now = options.now ?? new Date();
+  if (!promo.isActive) return false;
+  if (promo.startDate) {
+    const start =
+      typeof promo.startDate === "string"
+        ? new Date(promo.startDate)
+        : promo.startDate;
+    if (Number.isFinite(start.getTime()) && now < start) return false;
+  }
+  if (promo.endDate) {
+    const end =
+      typeof promo.endDate === "string" ? new Date(promo.endDate) : promo.endDate;
+    if (Number.isFinite(end.getTime()) && now > end) return false;
+  }
+
+  const explicitPlaylists = Array.isArray(promo.targetPlaylistIds)
+    ? promo.targetPlaylistIds
+    : [];
+
+  if (explicitPlaylists.length > 0 && !options.isDedicatedPromotionsStep) {
+    return Boolean(
+      options.activePlaylistId &&
+        explicitPlaylists.includes(options.activePlaylistId)
+    );
+  }
+
+  return matchesScreenTarget(promo, ctx, now);
+}
+
+/**
+ * Resolves effective Promotion ad-break cadence for a playlist:
+ * - `-1` = explicitly blocked on this playlist
+ * - `0`  = Auto (1 promotion every 3 slides whenever matching promotions exist)
+ * - `N > 0` = exact configured cadence (1 promotion every N slides)
+ */
+export function resolveEffectivePromoCadence(
+  configuredPromoEveryN: number | null | undefined,
+  hasMatchingPromotions: boolean
+): number {
+  if (!hasMatchingPromotions) return 0;
+  const raw = typeof configuredPromoEveryN === "number" ? configuredPromoEveryN : 0;
+  if (raw < 0) return 0;
+  if (raw === 0) return 3;
+  return Math.max(1, Math.floor(raw));
+}
+
+/**
  * Deterministically picks which step in a chained `rotationSequence` (e.g.
  * Playlist A 15 min -> Promotions 5 min -> Playlist B 15 min -> loop) should air
  * at `now`, keeping all screens in the same showroom synchronized without flickering.

@@ -33,9 +33,11 @@ import { hashDeviceToken } from "@/lib/security";
 import {
   chunkRecognitionsIntoWallPages,
   interleavePlaybackItems,
+  matchesPromotionForScreen,
   matchesScreenTarget,
   resolveActiveRotationStep,
   resolveActiveSchedule,
+  resolveEffectivePromoCadence,
 } from "@/lib/schedule-resolver";
 import { signQrRedirect } from "@/lib/url-security";
 import {
@@ -355,7 +357,40 @@ export async function GET(request: Request) {
         .from(promotions)
         .where(eq(promotions.isActive, true))
         .orderBy(desc(promotions.priority), desc(promotions.createdAt))
-        .catch(() => []),
+        .catch(async () => {
+          // Schema-safe fallback if a newly added optional column hasn't been pushed yet
+          try {
+            const coreRows = await db
+              .select({
+                id: promotions.id,
+                title: promotions.title,
+                agencyName: promotions.agencyName,
+                mediaType: promotions.mediaType,
+                publicUrl: promotions.publicUrl,
+                mimeType: promotions.mimeType,
+                sha256Checksum: promotions.sha256Checksum,
+                durationSeconds: promotions.durationSeconds,
+                audioTrackId: promotions.audioTrackId,
+                targetType: promotions.targetType,
+                targetId: promotions.targetId,
+                targetScreenIds: promotions.targetScreenIds,
+                priority: promotions.priority,
+                startDate: promotions.startDate,
+                endDate: promotions.endDate,
+                isActive: promotions.isActive,
+              })
+              .from(promotions)
+              .where(eq(promotions.isActive, true))
+              .orderBy(desc(promotions.priority), desc(promotions.createdAt));
+            return coreRows.map((row) => ({
+              ...row,
+              displayFitMode: "auto" as string,
+              targetPlaylistIds: null as string[] | null,
+            }));
+          } catch {
+            return [];
+          }
+        }),
       db
         .select()
         .from(employeeRecognitions)
@@ -376,42 +411,25 @@ export async function GET(request: Request) {
       : null;
 
     // Filter active, in-date Promotions & Employee Recognitions matching this screen
-    // (and optional explicit multi-playlist assignment `targetPlaylistIds`)
-    const matchedPromotions = allPromotions.filter((p) => {
-      const screenMatch = matchesScreenTarget(
+    // (explicit `targetPlaylistIds` embeds air on ANY screen playing that playlist!)
+    const matchedPromotions = allPromotions.filter((p) =>
+      matchesPromotionForScreen(
         {
           targetType: p.targetType,
           targetId: p.targetId,
           targetScreenIds: p.targetScreenIds,
+          targetPlaylistIds: p.targetPlaylistIds,
           startDate: p.startDate,
           endDate: p.endDate,
           isActive: p.isActive,
         },
         screenCtx,
-        now
-      );
-      if (!screenMatch) return false;
-      const explicitPlaylists = Array.isArray(p.targetPlaylistIds)
-        ? p.targetPlaylistIds
-        : [];
-      if (
-        explicitPlaylists.length > 0 &&
-        activeRotation?.step.kind !== "promotions"
-      ) {
-        return Boolean(
-          targetPlaylist?.id && explicitPlaylists.includes(targetPlaylist.id)
-        );
-      }
-      return true;
-    });
-
-    const hasExplicitlyEmbeddedPromo = Boolean(
-      targetPlaylist?.id &&
-        matchedPromotions.some(
-          (p) =>
-            Array.isArray(p.targetPlaylistIds) &&
-            p.targetPlaylistIds.includes(targetPlaylist.id)
-        )
+        {
+          activePlaylistId: targetPlaylist?.id ?? null,
+          isDedicatedPromotionsStep: activeRotation?.step.kind === "promotions",
+          now,
+        }
+      )
     );
 
     const matchedRecognitions = allRecognitions.filter((r) =>
@@ -559,15 +577,13 @@ export async function GET(request: Request) {
             )
           )
           : 0;
-      // If any promotion was explicitly embedded into this playlist via `targetPlaylistIds`,
-      // automatically interleave it (default every 3 slides) even if `promoInjectEveryN` was 0!
-      const configuredPromoEveryN = targetPlaylist?.promoInjectEveryN ?? 0;
-      const promoEveryN =
-        configuredPromoEveryN > 0
-          ? configuredPromoEveryN
-          : hasExplicitlyEmbeddedPromo
-            ? 3
-            : 0;
+      // Resolve effective Promotion cadence:
+      // 0 = Auto (1 Promo every 3 slides whenever matching promotions exist),
+      // -1 = explicitly blocked on this playlist, N > 0 = exact configured cadence.
+      const promoEveryN = resolveEffectivePromoCadence(
+        targetPlaylist?.promoInjectEveryN,
+        promoPlaybackItems.length > 0
+      );
       const withPromos = interleavePlaybackItems<Record<string, unknown>>({
         baseItems: enrichedBaseItems,
         promotions: promoPlaybackItems,

@@ -5,7 +5,7 @@
  * global Tailwind styles, Sonner toast notifications, and hydration safety.
  */
 
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import {
   Bebas_Neue,
@@ -101,6 +101,12 @@ export const metadata: Metadata = {
   title: "Crown Canvas — Enterprise Digital Signage",
   description:
     "Enterprise digital signage CMS & offline-first showroom player for multi-location networks.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

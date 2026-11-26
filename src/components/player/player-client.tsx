@@ -220,7 +220,7 @@ interface PlayerManifest {
   generatedAt: string;
 }
 
-const PLAYER_BUILD_VERSION = "2.5.0-seamless";
+const PLAYER_BUILD_VERSION = "2.6.0-tv-crisp";
 const STORAGE_TOKEN_KEY = "crown_canvas_device_token";
 const STORAGE_MANIFEST_KEY = "crown_canvas_last_manifest";
 const STORAGE_PENDING_PIN_KEY = "crown_canvas_pending_pin";
@@ -324,6 +324,7 @@ export function PlayerClient() {
 
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const initialBuildIdRef = useRef<string | null>(null);
+  const lastFsPromoteRef = useRef<number>(0);
   const videoStageRef = useRef<HTMLDivElement | null>(null);
   const ambilightCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const blobUrlsRef = useRef<Map<string, string>>(new Map());
@@ -388,7 +389,12 @@ export function PlayerClient() {
       setIsOnline(navigator.onLine);
       setClockText(formatEastAfricaClock(timezoneRef.current));
       setStorageChecked(true);
-      if (detected.isTvBrowser && !getFullscreenElement()) {
+      const isAlreadyKioskFullscreen =
+        Boolean(getFullscreenElement()) ||
+        (typeof window !== "undefined" &&
+          window.screen?.height > 0 &&
+          window.innerHeight >= window.screen.height - 24);
+      if (detected.isTvBrowser && !isAlreadyKioskFullscreen) {
         setShowRemoteHint(true);
       }
     }, 0);
@@ -1402,16 +1408,19 @@ export function PlayerClient() {
   }, []);
 
   // Keep fullscreen locked to the outer player container (never a child <video>)
-  // across standard & vendor-prefixed Smart TV engines (Samsung Tizen, LG webOS, WebKit).
+  // with a 2.5s cooldown so Smart TV browsers never re-flash "FULLSCREEN [X]" on slide changes.
   useEffect(() => {
     const onFullscreenChange = () => {
       const fsEl = getFullscreenElement();
       const container = playerContainerRef.current;
       if (fsEl && container && fsEl !== container && container.contains(fsEl)) {
-        // Browser put a child <video> into fullscreen; promote to whole player container
-        void exitElementFullscreen().then(() =>
-          requestElementFullscreen(container)
-        );
+        const now = Date.now();
+        if (now - lastFsPromoteRef.current > 2500) {
+          lastFsPromoteRef.current = now;
+          void exitElementFullscreen().then(() =>
+            requestElementFullscreen(container)
+          );
+        }
         return;
       }
       setIsFullscreen(Boolean(fsEl));
@@ -1497,8 +1506,9 @@ export function PlayerClient() {
     };
   }, [activeVideoContentKey, effectiveStageBackdrop, effectiveMediaFitMode]);
 
-  // Smart unmuted autoplay + low-RAM Smart TV hardware decoder cleanup keyed strictly
-  // on content identity & playback source (never on manifest object identity or row UUIDs!)
+  // Smart unmuted autoplay + legacy Smart TV inline attributes on ONE persistent <video> node
+  // (reusing the same DOM node across consecutive videos prevents Smart TV browsers from
+  // flashing a native "FULLSCREEN [X]" notification banner on every playlist item change!).
   useEffect(() => {
     const video = activeVideoRef.current;
     if (!video || !activeVideoContentKey) {
@@ -1506,6 +1516,10 @@ export function PlayerClient() {
     }
 
     let cancelled = false;
+    // Enforce strict inline playback across Tizen, webOS, Android TV WebView & Silk browsers
+    video.setAttribute("webkit-playsinline", "true");
+    video.setAttribute("x5-playsinline", "true");
+    video.setAttribute("x-webkit-airplay", "deny");
     video.volume = 1;
     video.muted = isMuted;
 
@@ -1534,7 +1548,23 @@ export function PlayerClient() {
     void attemptPlay();
     return () => {
       cancelled = true;
-      // Release hardware H.264/HEVC decoder ONLY when actually switching to a different video clip
+      try {
+        video.pause();
+      } catch {
+        // Ignore pause errors on older TV engines
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeVideoContentKey, currentPlaybackUrl, corsFallbackKey]);
+
+  // Explicitly release hardware H.264/HEVC video decoder when leaving video playback completely
+  // (e.g. moving to an image/promo/recognition slide or unmounting) to keep Smart TV RAM flat.
+  const isCurrentlyVideoSlide = Boolean(activeVideoContentKey);
+  useEffect(() => {
+    if (!isCurrentlyVideoSlide) return;
+    const video = activeVideoRef.current;
+    return () => {
+      if (!video) return;
       try {
         video.pause();
         video.removeAttribute("src");
@@ -1543,8 +1573,7 @@ export function PlayerClient() {
         // Ignore cleanup errors on older TV engines
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeVideoContentKey, currentPlaybackUrl, corsFallbackKey]);
+  }, [isCurrentlyVideoSlide]);
 
   // Ambient Background Music Engine (Cloudflare R2 MP3/AAC) with Smart Auto-Ducking:
   // Plays softly during silent images, agency Promotions, Studio slides & Employee Spotlights/Walls,
@@ -2037,11 +2066,13 @@ export function PlayerClient() {
             />
           )}
 
-          {/* Shrink-wrapped <video>: removes Chrome/Smart TV internal opaque black letterbox bars! */}
+          {/* Single Persistent Shrink-Wrapped <video> Node:
+              Reusing one <video> element across consecutive videos prevents Smart TV browsers
+              from flashing a "FULLSCREEN [X]" overlay on every playlist transition! */}
           {isCacheLookupReady && (
             <video
               ref={activeVideoRef}
-              key={`${videoContentKey}-${allowCors ? "cors" : "plain"}`}
+              key={allowCors ? "persistent-stage-video-cors" : "persistent-stage-video-plain"}
               src={videoSrc}
               style={isEdgeCover ? undefined : { aspectRatio: String(videoAspect) }}
               className={`relative z-10 transition-opacity duration-200 ${isFrameReady || !videoFreezeFrame ? "opacity-100" : "opacity-0"
@@ -2162,9 +2193,15 @@ export function PlayerClient() {
               src={imgSrc}
               alt=""
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 h-full w-full scale-125 object-cover opacity-100 blur-3xl brightness-95 saturate-125"
+              className={`pointer-events-none absolute inset-0 h-full w-full scale-125 object-cover opacity-100 brightness-95 saturate-125 ${
+                tvProfile.isTvBrowser ? "blur-2xl" : "blur-3xl"
+              }`}
             />
-            <div className="pointer-events-none absolute inset-0 bg-white/15 backdrop-blur-xl" />
+            <div
+              className={`pointer-events-none absolute inset-0 bg-white/15 ${
+                tvProfile.isTvBrowser ? "" : "backdrop-blur-xl"
+              }`}
+            />
           </>
         )}
         {effectiveImgBackdrop === "crown_navy" && !isNaturalLandscape && (
@@ -2508,6 +2545,7 @@ export function PlayerClient() {
           partnerTickerMode={
             manifest?.playlist?.partnerTickerMode ?? "pinned_right"
           }
+          isTvBrowser={tvProfile.isTvBrowser}
         >
           {mainStageContent}
         </MultiZoneFrame>

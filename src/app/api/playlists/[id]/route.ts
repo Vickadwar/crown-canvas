@@ -8,7 +8,7 @@ const patchPlaylistSchema = z.object({
   layoutId: z.string().uuid().nullable().optional(),
   sidebarProfileId: z.string().uuid().nullable().optional(),
   audioTrackId: z.string().uuid().nullable().optional(),
-  promoInjectEveryN: z.number().int().min(0).max(50).optional(),
+  promoInjectEveryN: z.number().int().min(-1).max(50).optional(),
   showPartnerLogos: z.boolean().optional(),
   partnerTickerMode: z.enum(["pinned_right", "inline_scroll", "hidden"]).optional(),
   mediaFitMode: z.enum(["ambient_fit", "edge_cover"]).optional(),
