@@ -33,6 +33,7 @@ const createPromotionSchema = z.object({
     .default("global"),
   targetId: z.string().uuid().nullable().optional(),
   targetScreenIds: z.array(z.string().uuid()).max(200).nullable().optional(),
+  targetPlaylistIds: z.array(z.string().uuid()).max(200).nullable().optional(),
   priority: z.number().int().min(1).max(1000).default(50),
   startDate: z.string().nullable().optional(),
   endDate: z.string().nullable().optional(),
@@ -81,6 +82,10 @@ export async function POST(request: Request) {
       parsed.data.targetScreenIds && parsed.data.targetScreenIds.length > 0
         ? parsed.data.targetScreenIds
         : null;
+    const playlistIds =
+      parsed.data.targetPlaylistIds && parsed.data.targetPlaylistIds.length > 0
+        ? parsed.data.targetPlaylistIds
+        : null;
 
     const [created] = await withDbRetry(() =>
       db
@@ -102,6 +107,7 @@ export async function POST(request: Request) {
           targetType: screenIds ? "screen" : parsed.data.targetType,
           targetId: screenIds ? screenIds[0] : parsed.data.targetId ?? null,
           targetScreenIds: screenIds,
+          targetPlaylistIds: playlistIds,
           priority: parsed.data.priority,
           startDate: parsed.data.startDate ? new Date(parsed.data.startDate) : null,
           endDate: parsed.data.endDate ? new Date(parsed.data.endDate) : null,

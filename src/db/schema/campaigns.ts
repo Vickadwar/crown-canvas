@@ -87,6 +87,7 @@ export const promotions = pgTable("promotions", {
   targetType: scheduleTargetEnum("target_type").default("global").notNull(),
   targetId: uuid("target_id"),
   targetScreenIds: jsonb("target_screen_ids").$type<string[] | null>(),
+  targetPlaylistIds: jsonb("target_playlist_ids").$type<string[] | null>(),
   priority: integer("priority").default(50).notNull(),
   startDate: timestamp("start_date", { withTimezone: true }),
   endDate: timestamp("end_date", { withTimezone: true }),

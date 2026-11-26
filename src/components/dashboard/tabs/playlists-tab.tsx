@@ -26,6 +26,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  Check,
   CheckCircle2,
   Edit3,
   Film,
@@ -34,6 +35,7 @@ import {
   Image as ImageIcon,
   LayoutPanelLeft,
   ListVideo,
+  Megaphone,
   Package,
   Plus,
   Search,
@@ -208,8 +210,9 @@ export function PlaylistsTab({
 
   // Content picker state
   const [showPicker, setShowPicker] = useState(false);
-  const [pickerTab, setPickerTab] = useState<"media" | "studio">("media");
+  const [pickerTab, setPickerTab] = useState<"media" | "studio" | "promotions">("media");
   const [pickerSearch, setPickerSearch] = useState("");
+  const [togglingPromoId, setTogglingPromoId] = useState<string | null>(null);
 
   // Local draft overrides for selected playlist
   const [tickerDrafts, setTickerDrafts] = useState<Record<string, string>>({});
@@ -377,6 +380,42 @@ export function PlaylistsTab({
       next,
       `Added item to "${activePlaylist.name}" & pushed to TVs`
     );
+  }
+
+  async function handleTogglePromoInActivePlaylist(promoId: string) {
+    if (!activePlaylist) return;
+    const promo = (data.promotions ?? []).find((p) => p.id === promoId);
+    if (!promo) return;
+    const currentIds = Array.isArray(promo.targetPlaylistIds)
+      ? promo.targetPlaylistIds
+      : [];
+    const alreadyEmbedded = currentIds.includes(activePlaylist.id);
+    const nextIds = alreadyEmbedded
+      ? currentIds.filter((id) => id !== activePlaylist.id)
+      : [...currentIds, activePlaylist.id];
+
+    setTogglingPromoId(promoId);
+    try {
+      const res = await fetch(`/api/promotions/${promoId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetPlaylistIds: nextIds.length > 0 ? nextIds : null,
+        }),
+      });
+      if (!res.ok) {
+        toast.error("Could not update promotion playlist assignment");
+        return;
+      }
+      toast.success(
+        alreadyEmbedded
+          ? `Removed "${promo.title}" from "${activePlaylist.name}"`
+          : `Embedded "${promo.title}" in "${activePlaylist.name}" & pushed to TVs`
+      );
+      await onRefresh();
+    } finally {
+      setTogglingPromoId(null);
+    }
   }
 
   async function handleAutoCreateSidebarForPlaylist(pl: PlaylistRecord) {
@@ -901,6 +940,17 @@ export function PlaylistsTab({
                           >
                             Crown Studio Slides ({data.quickPosts.length})
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => setPickerTab("promotions")}
+                            className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${pickerTab === "promotions"
+                              ? "bg-zinc-950 text-white"
+                              : "text-zinc-600"
+                              }`}
+                          >
+                            <Megaphone className="size-3" />
+                            Promotions ({(data.promotions ?? []).length})
+                          </button>
                           {onBrowseTemplatesForPlaylist && activePlaylist && (
                             <button
                               type="button"
@@ -963,36 +1013,83 @@ export function PlaylistsTab({
                                 <Plus className="size-3.5 shrink-0 text-blue-600" />
                               </button>
                             ))
-                          : data.quickPosts
-                            .filter((q) =>
-                              q.title
-                                .toLowerCase()
-                                .includes(pickerSearch.trim().toLowerCase())
-                            )
-                            .map((q) => (
-                              <button
-                                key={q.id}
-                                type="button"
-                                onClick={() =>
-                                  handleAppendItem(
-                                    "quick_post",
-                                    q.id,
-                                    q.durationSeconds || 15
-                                  )
-                                }
-                                className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-xs transition hover:border-zinc-950"
-                              >
-                                <div className="min-w-0">
-                                  <p className="truncate font-semibold">
-                                    {q.title}
-                                  </p>
-                                  <p className="text-[10px] text-zinc-500">
-                                    Studio Slide • {q.durationSeconds}s
-                                  </p>
-                                </div>
-                                <Plus className="size-3.5 shrink-0 text-violet-600" />
-                              </button>
-                            ))}
+                          : pickerTab === "studio"
+                            ? data.quickPosts
+                              .filter((q) =>
+                                q.title
+                                  .toLowerCase()
+                                  .includes(pickerSearch.trim().toLowerCase())
+                              )
+                              .map((q) => (
+                                <button
+                                  key={q.id}
+                                  type="button"
+                                  onClick={() =>
+                                    handleAppendItem(
+                                      "quick_post",
+                                      q.id,
+                                      q.durationSeconds || 15
+                                    )
+                                  }
+                                  className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-xs transition hover:border-zinc-950"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="truncate font-semibold">
+                                      {q.title}
+                                    </p>
+                                    <p className="text-[10px] text-zinc-500">
+                                      Studio Slide • {q.durationSeconds}s
+                                    </p>
+                                  </div>
+                                  <Plus className="size-3.5 shrink-0 text-violet-600" />
+                                </button>
+                              ))
+                            : (data.promotions ?? [])
+                              .filter((pr) =>
+                                pr.title
+                                  .toLowerCase()
+                                  .includes(pickerSearch.trim().toLowerCase())
+                              )
+                              .map((pr) => {
+                                const isEmbedded = Boolean(
+                                  activePlaylist &&
+                                    Array.isArray(pr.targetPlaylistIds) &&
+                                    pr.targetPlaylistIds.includes(activePlaylist.id)
+                                );
+                                return (
+                                  <button
+                                    key={pr.id}
+                                    type="button"
+                                    disabled={togglingPromoId === pr.id}
+                                    onClick={() =>
+                                      void handleTogglePromoInActivePlaylist(pr.id)
+                                    }
+                                    className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-xs transition ${
+                                      isEmbedded
+                                        ? "border-emerald-500 bg-emerald-50/50"
+                                        : "border-zinc-200 bg-white hover:border-zinc-950"
+                                    }`}
+                                  >
+                                    <div className="min-w-0">
+                                      <p className="truncate font-semibold">
+                                        {pr.title}
+                                      </p>
+                                      <p className="text-[10px] text-zinc-500">
+                                        {pr.agencyName} • {pr.mediaType.toUpperCase()} •{" "}
+                                        {pr.durationSeconds}s
+                                      </p>
+                                    </div>
+                                    {isEmbedded ? (
+                                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                                        <Check className="size-3" />
+                                        Embedded
+                                      </span>
+                                    ) : (
+                                      <Plus className="size-3.5 shrink-0 text-amber-600" />
+                                    )}
+                                  </button>
+                                );
+                              })}
                       </div>
                     </div>
                   )}

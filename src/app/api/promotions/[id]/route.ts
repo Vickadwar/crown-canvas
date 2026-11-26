@@ -15,13 +15,23 @@ const patchPromotionSchema = z.object({
   description: z.string().trim().max(500).optional(),
   agencyName: z.string().trim().max(120).optional(),
   campaignCode: z.string().trim().max(64).nullable().optional(),
+  mediaType: z.enum(["image", "video", "pdf"]).optional(),
+  publicUrl: z.string().url().optional(),
+  storagePath: z.string().min(2).max(500).optional(),
+  mimeType: z.string().max(100).optional(),
+  fileSizeBytes: z.number().int().nonnegative().optional(),
+  sha256Checksum: z.string().max(64).optional(),
   durationSeconds: z.number().int().min(5).max(300).optional(),
+  displayFitMode: z
+    .enum(["auto", "ambient_blur", "edge_cover", "showroom_light"])
+    .optional(),
   audioTrackId: z.string().uuid().nullable().optional(),
   targetType: z
     .enum(["screen", "screen_group", "branch", "country", "screen_role", "global"])
     .optional(),
   targetId: z.string().uuid().nullable().optional(),
   targetScreenIds: z.array(z.string().uuid()).max(200).nullable().optional(),
+  targetPlaylistIds: z.array(z.string().uuid()).max(200).nullable().optional(),
   priority: z.number().int().min(1).max(1000).optional(),
   startDate: z.string().nullable().optional(),
   endDate: z.string().nullable().optional(),
@@ -57,6 +67,18 @@ export async function PATCH(
     }
     if (parsed.data.endDate !== undefined) {
       patchData.endDate = parsed.data.endDate ? new Date(parsed.data.endDate) : null;
+    }
+    if (parsed.data.targetScreenIds !== undefined) {
+      patchData.targetScreenIds =
+        parsed.data.targetScreenIds && parsed.data.targetScreenIds.length > 0
+          ? parsed.data.targetScreenIds
+          : null;
+    }
+    if (parsed.data.targetPlaylistIds !== undefined) {
+      patchData.targetPlaylistIds =
+        parsed.data.targetPlaylistIds && parsed.data.targetPlaylistIds.length > 0
+          ? parsed.data.targetPlaylistIds
+          : null;
     }
 
     const [updated] = await withDbRetry(() =>

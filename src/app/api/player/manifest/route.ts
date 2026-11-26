@@ -376,8 +376,9 @@ export async function GET(request: Request) {
       : null;
 
     // Filter active, in-date Promotions & Employee Recognitions matching this screen
-    const matchedPromotions = allPromotions.filter((p) =>
-      matchesScreenTarget(
+    // (and optional explicit multi-playlist assignment `targetPlaylistIds`)
+    const matchedPromotions = allPromotions.filter((p) => {
+      const screenMatch = matchesScreenTarget(
         {
           targetType: p.targetType,
           targetId: p.targetId,
@@ -388,7 +389,29 @@ export async function GET(request: Request) {
         },
         screenCtx,
         now
-      )
+      );
+      if (!screenMatch) return false;
+      const explicitPlaylists = Array.isArray(p.targetPlaylistIds)
+        ? p.targetPlaylistIds
+        : [];
+      if (
+        explicitPlaylists.length > 0 &&
+        activeRotation?.step.kind !== "promotions"
+      ) {
+        return Boolean(
+          targetPlaylist?.id && explicitPlaylists.includes(targetPlaylist.id)
+        );
+      }
+      return true;
+    });
+
+    const hasExplicitlyEmbeddedPromo = Boolean(
+      targetPlaylist?.id &&
+        matchedPromotions.some(
+          (p) =>
+            Array.isArray(p.targetPlaylistIds) &&
+            p.targetPlaylistIds.includes(targetPlaylist.id)
+        )
     );
 
     const matchedRecognitions = allRecognitions.filter((r) =>
@@ -536,7 +559,15 @@ export async function GET(request: Request) {
             )
           )
           : 0;
-      const promoEveryN = targetPlaylist?.promoInjectEveryN ?? 0;
+      // If any promotion was explicitly embedded into this playlist via `targetPlaylistIds`,
+      // automatically interleave it (default every 3 slides) even if `promoInjectEveryN` was 0!
+      const configuredPromoEveryN = targetPlaylist?.promoInjectEveryN ?? 0;
+      const promoEveryN =
+        configuredPromoEveryN > 0
+          ? configuredPromoEveryN
+          : hasExplicitlyEmbeddedPromo
+            ? 3
+            : 0;
       const withPromos = interleavePlaybackItems<Record<string, unknown>>({
         baseItems: enrichedBaseItems,
         promotions: promoPlaybackItems,

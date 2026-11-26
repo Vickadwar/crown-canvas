@@ -14,9 +14,11 @@ import {
   FileImage,
   Film,
   FileText,
+  ListVideo,
   Megaphone,
   Music,
   PauseCircle,
+  Pencil,
   PlayCircle,
   Plus,
   Search,
@@ -146,9 +148,14 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
     () => new Map(data.branches.map((b) => [b.id, b])),
     [data.branches]
   );
+  const playlistById = useMemo(
+    () => new Map(data.playlists.map((pl) => [pl.id, pl])),
+    [data.playlists]
+  );
 
-  // Campaign Create Form
+  // Campaign Create / Edit Form
   const [showPromoForm, setShowPromoForm] = useState(promotions.length === 0);
+  const [editingPromoId, setEditingPromoId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [agencyName, setAgencyName] = useState("Creative Agency");
   const [campaignCode, setCampaignCode] = useState("");
@@ -156,16 +163,93 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
   const [durationSeconds, setDurationSeconds] = useState(15);
   const [priority, setPriority] = useState(60);
   const [audioTrackId, setAudioTrackId] = useState("");
+  const [displayFitMode, setDisplayFitMode] = useState<
+    "auto" | "ambient_blur" | "edge_cover" | "showroom_light"
+  >("auto");
   const [targetMode, setTargetMode] = useState<
     "global" | "branch" | "country" | "screen_group" | "screens"
   >("global");
   const [targetId, setTargetId] = useState("");
   const [selectedScreenIds, setSelectedScreenIds] = useState<string[]>([]);
+  const [selectedPlaylistIds, setSelectedPlaylistIds] = useState<string[]>([]);
   const [screenSearch, setScreenSearch] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [creativeFile, setCreativeFile] = useState<File | null>(null);
   const [savingPromo, setSavingPromo] = useState(false);
+
+  function resetPromoForm() {
+    setEditingPromoId(null);
+    setTitle("");
+    setAgencyName("Creative Agency");
+    setCampaignCode("");
+    setDescription("");
+    setDurationSeconds(15);
+    setPriority(60);
+    setAudioTrackId("");
+    setDisplayFitMode("auto");
+    setTargetMode("global");
+    setTargetId("");
+    setSelectedScreenIds([]);
+    setSelectedPlaylistIds([]);
+    setStartDate("");
+    setEndDate("");
+    setCreativeFile(null);
+  }
+
+  function openCreatePromoForm() {
+    resetPromoForm();
+    setShowPromoForm(true);
+  }
+
+  function openEditPromoForm(p: PromotionItem) {
+    setEditingPromoId(p.id);
+    setTitle(p.title);
+    setAgencyName(p.agencyName || "Creative Agency");
+    setCampaignCode(p.campaignCode ?? "");
+    setDescription(p.description ?? "");
+    setDurationSeconds(p.durationSeconds || 15);
+    setPriority(p.priority || 50);
+    setAudioTrackId(p.audioTrackId ?? "");
+    setDisplayFitMode(
+      (p.displayFitMode as
+        | "auto"
+        | "ambient_blur"
+        | "edge_cover"
+        | "showroom_light") || "auto"
+    );
+    if (p.targetScreenIds && p.targetScreenIds.length > 0) {
+      setTargetMode("screens");
+      setSelectedScreenIds(p.targetScreenIds);
+      setTargetId("");
+    } else if (
+      p.targetType === "branch" ||
+      p.targetType === "country" ||
+      p.targetType === "screen_group"
+    ) {
+      setTargetMode(p.targetType);
+      setTargetId(p.targetId ?? "");
+      setSelectedScreenIds([]);
+    } else if (p.targetType === "screen" && p.targetId) {
+      setTargetMode("screens");
+      setSelectedScreenIds([p.targetId]);
+      setTargetId("");
+    } else {
+      setTargetMode("global");
+      setTargetId("");
+      setSelectedScreenIds([]);
+    }
+    setSelectedPlaylistIds(
+      Array.isArray(p.targetPlaylistIds) ? p.targetPlaylistIds : []
+    );
+    setStartDate(p.startDate ? p.startDate.slice(0, 10) : "");
+    setEndDate(p.endDate ? p.endDate.slice(0, 10) : "");
+    setCreativeFile(null);
+    setShowPromoForm(true);
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
 
   // Audio Track Upload Form
   const [showAudioForm, setShowAudioForm] = useState(audioTracks.length === 0);
@@ -184,10 +268,14 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
     return data.screens.filter((s) => s.name.toLowerCase().includes(q));
   }, [data.screens, screenSearch]);
 
-  async function handleCreatePromotion(e: React.FormEvent) {
+  async function handleSavePromotion(e: React.FormEvent) {
     e.preventDefault();
-    if (!title.trim() || !creativeFile) {
-      toast.error("Enter a campaign title and attach an agency design file.");
+    if (!title.trim()) {
+      toast.error("Enter a campaign title.");
+      return;
+    }
+    if (!editingPromoId && !creativeFile) {
+      toast.error("Attach an agency design file (PNG, JPG, PDF, or MP4).");
       return;
     }
     if (targetMode === "screens" && selectedScreenIds.length === 0) {
@@ -197,63 +285,90 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
 
     setSavingPromo(true);
     try {
-      let uploadFile = creativeFile;
-      let mediaType: "image" | "video" | "pdf" = "image";
-      if (creativeFile.type.startsWith("video/")) {
-        mediaType = "video";
-      } else if (
-        creativeFile.type === "application/pdf" ||
-        creativeFile.name.toLowerCase().endsWith(".pdf")
-      ) {
-        mediaType = "pdf";
-      } else if (creativeFile.type.startsWith("image/")) {
-        mediaType = "image";
-        const opt = await optimizeImageForSignage(creativeFile);
-        uploadFile = opt.file;
-      }
+      let uploadedMediaPayload:
+        | {
+            mediaType: "image" | "video" | "pdf";
+            publicUrl: string;
+            storagePath: string;
+            mimeType: string;
+            fileSizeBytes: number;
+            sha256Checksum: string;
+          }
+        | undefined;
 
-      const uploaded = await uploadToCloudR2(uploadFile, "PROMOTIONS");
-
-      const res = await fetch("/api/promotions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: title.trim(),
-          agencyName: agencyName.trim() || "Creative Agency",
-          campaignCode: campaignCode.trim() || null,
-          description: description.trim(),
+      if (creativeFile) {
+        let uploadFile = creativeFile;
+        let mediaType: "image" | "video" | "pdf" = "image";
+        if (creativeFile.type.startsWith("video/")) {
+          mediaType = "video";
+        } else if (
+          creativeFile.type === "application/pdf" ||
+          creativeFile.name.toLowerCase().endsWith(".pdf")
+        ) {
+          mediaType = "pdf";
+        } else if (creativeFile.type.startsWith("image/")) {
+          mediaType = "image";
+          const opt = await optimizeImageForSignage(creativeFile);
+          uploadFile = opt.file;
+        }
+        const uploaded = await uploadToCloudR2(uploadFile, "PROMOTIONS");
+        uploadedMediaPayload = {
           mediaType,
           publicUrl: uploaded.publicUrl,
           storagePath: uploaded.storagePath,
           mimeType: uploadFile.type || "image/webp",
           fileSizeBytes: uploadFile.size,
           sha256Checksum: uploaded.sha256Checksum,
-          durationSeconds: Math.max(5, Number(durationSeconds) || 15),
-          priority: Math.max(1, Number(priority) || 50),
-          audioTrackId: audioTrackId || null,
-          targetType: targetMode === "screens" ? "screen" : targetMode,
-          targetId:
-            targetMode === "global" || targetMode === "screens"
-              ? null
-              : targetId || null,
-          targetScreenIds:
-            targetMode === "screens" ? selectedScreenIds : null,
-          startDate: startDate ? new Date(`${startDate}T00:00:00`).toISOString() : null,
-          endDate: endDate ? new Date(`${endDate}T23:59:59`).toISOString() : null,
-        }),
-      });
+        };
+      }
+
+      const commonPayload = {
+        title: title.trim(),
+        agencyName: agencyName.trim() || "Creative Agency",
+        campaignCode: campaignCode.trim() || null,
+        description: description.trim(),
+        durationSeconds: Math.max(5, Number(durationSeconds) || 15),
+        displayFitMode,
+        priority: Math.max(1, Number(priority) || 50),
+        audioTrackId: audioTrackId || null,
+        targetType: targetMode === "screens" ? "screen" : targetMode,
+        targetId:
+          targetMode === "global" || targetMode === "screens"
+            ? null
+            : targetId || null,
+        targetScreenIds:
+          targetMode === "screens" ? selectedScreenIds : null,
+        targetPlaylistIds:
+          selectedPlaylistIds.length > 0 ? selectedPlaylistIds : null,
+        startDate: startDate
+          ? new Date(`${startDate}T00:00:00`).toISOString()
+          : null,
+        endDate: endDate
+          ? new Date(`${endDate}T23:59:59`).toISOString()
+          : null,
+        ...(uploadedMediaPayload ?? {}),
+      };
+
+      const res = await fetch(
+        editingPromoId ? `/api/promotions/${editingPromoId}` : "/api/promotions",
+        {
+          method: editingPromoId ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(commonPayload),
+        }
+      );
       const json = (await res.json()) as { error?: string };
       if (!res.ok) {
         toast.error(json.error || "Could not save promotion");
         return;
       }
 
-      toast.success(`Promotion "${title.trim()}" uploaded to R2 & activated`);
-      setTitle("");
-      setCampaignCode("");
-      setDescription("");
-      setCreativeFile(null);
-      setSelectedScreenIds([]);
+      toast.success(
+        editingPromoId
+          ? `Updated "${title.trim()}" & pushed changes live to TVs`
+          : `Promotion "${title.trim()}" uploaded to R2 & activated`
+      );
+      resetPromoForm();
       setShowPromoForm(false);
       await onRefresh();
     } catch (err) {
@@ -402,7 +517,16 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
 
         <div className="flex items-center gap-2">
           {subTab === "campaigns" ? (
-            <Button size="sm" onClick={() => setShowPromoForm((v) => !v)}>
+            <Button
+              size="sm"
+              onClick={() => {
+                if (showPromoForm && !editingPromoId) {
+                  setShowPromoForm(false);
+                } else {
+                  openCreatePromoForm();
+                }
+              }}
+            >
               <Plus className="size-3.5" />
               Upload Promotion Design
             </Button>
@@ -422,23 +546,30 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
               <CardHeader className="flex flex-row items-center justify-between pb-3">
                 <div>
                   <CardTitle className="text-base">
-                    Upload Agency Promotion Campaign
+                    {editingPromoId
+                      ? `Edit Promotion — ${title || "Campaign"}`
+                      : "Upload Agency Promotion Campaign"}
                   </CardTitle>
                   <CardDescription>
-                    Upload agency-ready posters, videos, or PDFs directly to Cloudflare R2 ($0 egress), attach ambient music, and schedule targeted screens.
+                    {editingPromoId
+                      ? "Update embedded playlists, target screens, display fit, schedule dates, background music, or optionally replace the creative file."
+                      : "Upload agency-ready posters, videos, or PDFs directly to Cloudflare R2 ($0 egress), embed in specific playlists, attach ambient music, and target screens."}
                   </CardDescription>
                 </div>
                 <Button
                   size="icon-xs"
                   variant="ghost"
-                  onClick={() => setShowPromoForm(false)}
+                  onClick={() => {
+                    resetPromoForm();
+                    setShowPromoForm(false);
+                  }}
                 >
                   <X className="size-4" />
                 </Button>
               </CardHeader>
               <CardContent>
                 <form
-                  onSubmit={handleCreatePromotion}
+                  onSubmit={handleSavePromotion}
                   className="grid gap-3.5 md:grid-cols-12"
                 >
                   <div className="space-y-1 md:col-span-4">
@@ -491,7 +622,9 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
 
                   <div className="space-y-1 md:col-span-4">
                     <Label className="text-xs">
-                      Agency Creative File (PNG / JPG / WebP / MP4 / PDF)
+                      {editingPromoId
+                        ? "Replace Creative File (Optional — leave blank to keep current)"
+                        : "Agency Creative File (PNG / JPG / WebP / MP4 / PDF)"}
                     </Label>
                     <Input
                       type="file"
@@ -500,7 +633,7 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
                       onChange={(e) =>
                         setCreativeFile(e.target.files?.[0] ?? null)
                       }
-                      required
+                      required={!editingPromoId}
                     />
                   </div>
                   <div className="space-y-1 md:col-span-3">
@@ -529,6 +662,23 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
                       className="h-8 text-xs"
                       value={priority}
                       onChange={(e) => setPriority(Number(e.target.value) || 50)}
+                    />
+                  </div>
+
+                  <div className="space-y-1 md:col-span-4">
+                    <Label className="text-xs">Display Fit / A4 Backdrop</Label>
+                    <ModernSelect
+                      size="sm"
+                      value={displayFitMode}
+                      onValueChange={(v) =>
+                        setDisplayFitMode(v as typeof displayFitMode)
+                      }
+                      options={[
+                        { value: "auto", label: "Auto (A4 Blur + Natural Landscape)" },
+                        { value: "ambient_blur", label: "Vibrant Ambient Blur" },
+                        { value: "showroom_light", label: "Showroom Light Gallery" },
+                        { value: "edge_cover", label: "Edge-to-Edge Fill" },
+                      ]}
                     />
                   </div>
 
@@ -640,18 +790,100 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
                     </div>
                   )}
 
+                  {/* Multi-Playlist Embedding Selector */}
+                  {data.playlists.length > 0 && (
+                    <div className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50/70 p-3 md:col-span-12">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <Label className="flex items-center gap-1.5 text-xs font-semibold">
+                            <ListVideo className="size-3.5 text-blue-600" />
+                            Embed in Playlists (
+                            {selectedPlaylistIds.length === 0
+                              ? "All Enabled Playlists"
+                              : `${selectedPlaylistIds.length} Selected`}
+                            )
+                          </Label>
+                          <p className="text-[11px] text-zinc-500">
+                            Pick specific playlists to embed this promo into automatically (even across multiple playlists), or leave unchecked to run on any playlist with Promo Injection enabled.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            onClick={() =>
+                              setSelectedPlaylistIds(
+                                data.playlists.map((pl) => pl.id)
+                              )
+                            }
+                          >
+                            All Playlists
+                          </Button>
+                          {selectedPlaylistIds.length > 0 && (
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="ghost"
+                              onClick={() => setSelectedPlaylistIds([])}
+                            >
+                              Clear
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="grid max-h-36 gap-1.5 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
+                        {data.playlists.map((pl) => {
+                          const checked = selectedPlaylistIds.includes(pl.id);
+                          return (
+                            <button
+                              key={pl.id}
+                              type="button"
+                              onClick={() =>
+                                setSelectedPlaylistIds((prev) =>
+                                  checked
+                                    ? prev.filter((id) => id !== pl.id)
+                                    : [...prev, pl.id]
+                                )
+                              }
+                              className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-xs transition ${
+                                checked
+                                  ? "border-zinc-950 bg-white font-semibold text-zinc-950"
+                                  : "border-zinc-200 bg-white/70 text-zinc-600 hover:border-zinc-300"
+                              }`}
+                            >
+                              <span className="truncate">{pl.name}</span>
+                              {checked && (
+                                <Check className="size-3.5 shrink-0 text-emerald-600" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex items-end justify-end gap-2 md:col-span-12">
                     <Button
                       type="button"
                       size="sm"
                       variant="outline"
-                      onClick={() => setShowPromoForm(false)}
+                      onClick={() => {
+                        resetPromoForm();
+                        setShowPromoForm(false);
+                      }}
                     >
                       Cancel
                     </Button>
                     <Button type="submit" size="sm" disabled={savingPromo}>
                       <Upload className="size-3.5" />
-                      {savingPromo ? "Uploading to R2..." : "Publish Promotion"}
+                      {savingPromo
+                        ? editingPromoId
+                          ? "Saving Changes..."
+                          : "Uploading to R2..."
+                        : editingPromoId
+                          ? "Save Changes"
+                          : "Publish Promotion"}
                     </Button>
                   </div>
                 </form>
@@ -727,6 +959,22 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
                           Agency: <strong className="text-zinc-700">{promo.agencyName}</strong> •{" "}
                           {resolveTargetText(promo)}
                         </p>
+                        <p className="flex items-center gap-1 text-[10px] text-zinc-600">
+                          <ListVideo className="size-3 shrink-0 text-blue-600" />
+                          <span className="truncate">
+                            {promo.targetPlaylistIds &&
+                            promo.targetPlaylistIds.length > 0
+                              ? (() => {
+                                  const plNames = promo.targetPlaylistIds
+                                    .map((id) => playlistById.get(id)?.name)
+                                    .filter(Boolean);
+                                  return plNames.length <= 2
+                                    ? `Playlists: ${plNames.join(", ") || `${promo.targetPlaylistIds.length} selected`}`
+                                    : `Playlists: ${plNames.slice(0, 2).join(", ")} +${plNames.length - 2} more`;
+                                })()
+                              : "Playlists: All enabled playlists (auto)"}
+                          </span>
+                        </p>
                         {(promo.startDate || promo.endDate) && (
                           <p className="flex items-center gap-1 text-[10px] text-zinc-500">
                             <Calendar className="size-3 text-zinc-400" />
@@ -742,27 +990,37 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
                         )}
                       </div>
 
-                      <div className="flex items-center justify-end gap-1 border-t border-zinc-100 pt-2">
+                      <div className="flex items-center justify-between gap-1 border-t border-zinc-100 pt-2">
                         <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          title={promo.isActive ? "Pause" : "Activate"}
-                          onClick={() => void handleTogglePromo(promo)}
+                          size="xs"
+                          variant="outline"
+                          onClick={() => openEditPromoForm(promo)}
                         >
-                          {promo.isActive ? (
-                            <PauseCircle className="size-4 text-amber-600" />
-                          ) : (
-                            <PlayCircle className="size-4 text-emerald-600" />
-                          )}
+                          <Pencil className="size-3 text-zinc-700" />
+                          Edit / Playlists
                         </Button>
-                        <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          title="Delete Promotion"
-                          onClick={() => void handleDeletePromo(promo)}
-                        >
-                          <Trash2 className="size-3.5 text-rose-500" />
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            title={promo.isActive ? "Pause" : "Activate"}
+                            onClick={() => void handleTogglePromo(promo)}
+                          >
+                            {promo.isActive ? (
+                              <PauseCircle className="size-4 text-amber-600" />
+                            ) : (
+                              <PlayCircle className="size-4 text-emerald-600" />
+                            )}
+                          </Button>
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            title="Delete Promotion"
+                            onClick={() => void handleDeletePromo(promo)}
+                          >
+                            <Trash2 className="size-3.5 text-rose-500" />
+                          </Button>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>

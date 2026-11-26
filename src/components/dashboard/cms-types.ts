@@ -240,6 +240,7 @@ export interface PromotionItem {
   mimeType: string;
   fileSizeBytes: number;
   durationSeconds: number;
+  displayFitMode?: "auto" | "ambient_blur" | "edge_cover" | "showroom_light" | string;
   audioTrackId: string | null;
   targetType:
     | "screen"
@@ -250,6 +251,7 @@ export interface PromotionItem {
     | "global";
   targetId: string | null;
   targetScreenIds?: string[] | null;
+  targetPlaylistIds?: string[] | null;
   priority: number;
   startDate: string | null;
   endDate: string | null;
