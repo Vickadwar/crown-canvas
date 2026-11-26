@@ -7,7 +7,7 @@
  * (Edit, Activate/Deactivate pause, Delete), verified Screen Groups & Bulk Fleet Actions.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Camera,
   ChevronLeft,
@@ -43,15 +43,44 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { computeScreenHealth } from "@/lib/screen-health";
 import type { OverviewPayload, ScreenItem } from "../cms-types";
 
 interface FleetTabProps {
   data: OverviewPayload;
   onRefresh: () => Promise<void>;
+  onSilentRefresh?: () => Promise<void>;
+  lastSyncedAt?: number | null;
 }
 
-export function FleetTab({ data, onRefresh }: FleetTabProps) {
+function formatAgeLabel(ageSeconds: number | null): string {
+  if (ageSeconds === null || !Number.isFinite(ageSeconds)) {
+    return "Never connected";
+  }
+  if (ageSeconds < 10) return "Just now";
+  if (ageSeconds < 60) return `${ageSeconds}s ago`;
+  const mins = Math.floor(ageSeconds / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+export function FleetTab({
+  data,
+  onRefresh,
+  onSilentRefresh,
+  lastSyncedAt,
+}: FleetTabProps) {
   const confirm = useConfirm();
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const [syncingNow, setSyncingNow] = useState(false);
+
+  // Live 5-second local clock so "Seen Xs ago" & Online -> Degraded -> Offline badges tick live
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, []);
   // Search, Filters, View & Pagination (handles 100s of screens smoothly)
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<
@@ -114,13 +143,37 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
     [data.playlists]
   );
 
+  // Evaluate live screen health against current wall clock (respecting explicit offline disconnect)
+  const screenLiveHealth = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        status: "online" | "degraded" | "offline" | "paused";
+        ageSeconds: number | null;
+      }
+    >();
+    for (const s of data.screens) {
+      if (s.isActive === false) {
+        map.set(s.id, { status: "paused", ageSeconds: s.lastSeenSeconds ?? null });
+        continue;
+      }
+      const computed = computeScreenHealth(s.lastHeartbeatAt, nowMs);
+      if (s.isOnline === false) {
+        map.set(s.id, { status: "offline", ageSeconds: computed.ageSeconds });
+      } else {
+        map.set(s.id, {
+          status: computed.healthStatus,
+          ageSeconds: computed.ageSeconds,
+        });
+      }
+    }
+    return map;
+  }, [data.screens, nowMs]);
+
   const filteredScreens = useMemo(() => {
     const q = search.trim().toLowerCase();
     return data.screens.filter((scr) => {
-      const isPaused = scr.isActive === false;
-      const health = isPaused
-        ? "paused"
-        : (scr.healthStatus ?? (scr.isOnline ? "online" : "offline"));
+      const health = screenLiveHealth.get(scr.id)?.status ?? "offline";
       if (statusFilter !== "all" && health !== statusFilter) return false;
       if (branchFilter && scr.branchId !== branchFilter) return false;
       if (groupFilter && (scr.groupId ?? "") !== groupFilter) return false;
@@ -139,6 +192,7 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
     });
   }, [
     data.screens,
+    screenLiveHealth,
     search,
     statusFilter,
     branchFilter,
@@ -161,13 +215,14 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
     let offline = 0;
     let paused = 0;
     for (const s of data.screens) {
-      if (s.isActive === false) paused++;
-      else if (s.healthStatus === "online" || s.isOnline) online++;
-      else if (s.healthStatus === "degraded") degraded++;
+      const status = screenLiveHealth.get(s.id)?.status ?? "offline";
+      if (status === "paused") paused++;
+      else if (status === "online") online++;
+      else if (status === "degraded") degraded++;
       else offline++;
     }
     return { all: data.screens.length, online, degraded, offline, paused };
-  }, [data.screens]);
+  }, [data.screens, screenLiveHealth]);
 
   function openEditScreen(scr: ScreenItem) {
     setEditingScreen(scr);
@@ -418,28 +473,72 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
     }
   }
 
-  function renderStatusBadge(scr: ScreenItem) {
-    if (scr.isActive === false) {
-      return <Badge variant="secondary">Paused</Badge>;
-    }
-    const health = scr.healthStatus ?? (scr.isOnline ? "online" : "offline");
-    if (health === "online") {
+  function renderStatusBadge(scr: ScreenItem, showAge = true) {
+    const live = screenLiveHealth.get(scr.id) ?? {
+      status: scr.isActive === false ? "paused" : "offline",
+      ageSeconds: scr.lastSeenSeconds ?? null,
+    };
+    const ageText = formatAgeLabel(live.ageSeconds);
+    if (live.status === "paused") {
       return (
-        <Badge variant="success">
-          <Wifi className="size-3" />
-          Online
-        </Badge>
+        <div className="space-y-0.5">
+          <Badge variant="secondary">Paused</Badge>
+          {showAge && (
+            <p className="text-[10px] text-zinc-400">Seen {ageText}</p>
+          )}
+        </div>
       );
     }
-    if (health === "degraded") {
-      return <Badge variant="warning">Degraded</Badge>;
+    if (live.status === "online") {
+      return (
+        <div className="space-y-0.5">
+          <Badge variant="success">
+            <Wifi className="size-3" />
+            Online
+          </Badge>
+          {showAge && (
+            <p className="text-[10px] text-emerald-700/80">{ageText}</p>
+          )}
+        </div>
+      );
+    }
+    if (live.status === "degraded") {
+      return (
+        <div className="space-y-0.5">
+          <Badge variant="warning">Degraded</Badge>
+          {showAge && (
+            <p className="text-[10px] text-amber-700/80">Seen {ageText}</p>
+          )}
+        </div>
+      );
     }
     return (
-      <Badge variant="danger">
-        <WifiOff className="size-3" />
-        Offline
-      </Badge>
+      <div className="space-y-0.5">
+        <Badge variant="danger">
+          <WifiOff className="size-3" />
+          Offline
+        </Badge>
+        {showAge && (
+          <p className="text-[10px] text-zinc-400">
+            {live.ageSeconds !== null ? `Seen ${ageText}` : "Never connected"}
+          </p>
+        )}
+      </div>
     );
+  }
+
+  async function handleManualLiveSync() {
+    setSyncingNow(true);
+    try {
+      if (onSilentRefresh) {
+        await onSilentRefresh();
+      } else {
+        await onRefresh();
+      }
+      setNowMs(Date.now());
+    } finally {
+      setSyncingNow(false);
+    }
   }
 
   const allOnPageSelected =
@@ -548,32 +647,56 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
         </div>
       </div>
 
-      {/* Status Filter Pills */}
-      <div className="flex flex-wrap items-center gap-2">
-        {(
-          [
-            { id: "all", label: `All Displays (${counts.all})`, badge: "outline" },
-            { id: "online", label: `Online (${counts.online})`, badge: "success" },
-            { id: "degraded", label: `Degraded (${counts.degraded})`, badge: "warning" },
-            { id: "offline", label: `Offline (${counts.offline})`, badge: "danger" },
-            { id: "paused", label: `Paused (${counts.paused})`, badge: "secondary" },
-          ] as const
-        ).map((pill) => (
-          <button
-            key={pill.id}
-            type="button"
-            onClick={() => {
-              setStatusFilter(pill.id);
-              setPage(1);
-            }}
-            className={`rounded-full px-3 py-1 text-xs font-medium transition ${statusFilter === pill.id
-              ? "bg-zinc-950 text-white"
-              : "border border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
-              }`}
+      {/* Status Filter Pills + Live Auto-Refresh Indicator */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {(
+            [
+              { id: "all", label: `All Displays (${counts.all})`, badge: "outline" },
+              { id: "online", label: `Online (${counts.online})`, badge: "success" },
+              { id: "degraded", label: `Degraded (${counts.degraded})`, badge: "warning" },
+              { id: "offline", label: `Offline (${counts.offline})`, badge: "danger" },
+              { id: "paused", label: `Paused (${counts.paused})`, badge: "secondary" },
+            ] as const
+          ).map((pill) => (
+            <button
+              key={pill.id}
+              type="button"
+              onClick={() => {
+                setStatusFilter(pill.id);
+                setPage(1);
+              }}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition ${statusFilter === pill.id
+                ? "bg-zinc-950 text-white"
+                : "border border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
+                }`}
+            >
+              {pill.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50/70 px-2.5 py-1 text-[11px] font-medium text-emerald-800">
+            <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
+            Live Auto-Sync (10s)
+            {lastSyncedAt && (
+              <span className="text-emerald-700/70">
+                • {formatAgeLabel(Math.max(0, Math.round((nowMs - lastSyncedAt) / 1000)))}
+              </span>
+            )}
+          </span>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={syncingNow}
+            onClick={() => void handleManualLiveSync()}
+            title="Pull latest live TV telemetry now"
           >
-            {pill.label}
-          </button>
-        ))}
+            <RefreshCw className={`size-3 ${syncingNow ? "animate-spin" : ""}`} />
+            Sync Now
+          </Button>
+        </div>
       </div>
 
       {/* Collapsible Pair New Screen Panel */}
@@ -1125,8 +1248,13 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
                             <p className="text-[10px] text-zinc-500">
                               {scr.hardwareType === "android_tv"
                                 ? "Android TV"
-                                : "Mini PC"}{" "}
-                              • {scr.orientation}
+                                : scr.hardwareType === "other"
+                                  ? "Smart TV"
+                                  : "Mini PC"}{" "}
+                              • {scr.resolution || scr.orientation}
+                              {scr.appVersion
+                                ? ` • v${scr.appVersion.split("-")[0]}`
+                                : ""}
                             </p>
                           </div>
                         </div>
@@ -1167,12 +1295,29 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
                         </div>
                       </td>
                       <td className="px-3 py-2.5 text-[11px] text-zinc-500">
-                        <p className="max-w-[180px] truncate font-medium text-zinc-700">
-                          {scr.currentItemTitle || "Idle / Syncing"}
-                        </p>
-                        <p>
-                          {scr.cachedAssetCount} cached • {scr.storageUsedMb} MB
-                        </p>
+                        {(() => {
+                          const liveStatus =
+                            screenLiveHealth.get(scr.id)?.status ?? "offline";
+                          const isLiveOnline = liveStatus === "online";
+                          return (
+                            <>
+                              <p
+                                className={`max-w-[190px] truncate font-medium ${
+                                  isLiveOnline ? "text-zinc-800" : "text-zinc-400"
+                                }`}
+                              >
+                                {isLiveOnline
+                                  ? scr.currentItemTitle || "Playing playlist..."
+                                  : scr.currentItemTitle
+                                    ? `Last: ${scr.currentItemTitle}`
+                                    : "Disconnected"}
+                              </p>
+                              <p>
+                                {scr.cachedAssetCount} cached • {scr.storageUsedMb} MB
+                              </p>
+                            </>
+                          );
+                        })()}
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex items-center justify-end gap-1">
@@ -1323,7 +1468,10 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
                     </div>
                   )}
                   <div className="absolute left-3 top-3">
-                    {renderStatusBadge(scr)}
+                    {renderStatusBadge(scr, false)}
+                  </div>
+                  <div className="absolute right-3 top-3 rounded-full bg-black/65 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-xs">
+                    {formatAgeLabel(screenLiveHealth.get(scr.id)?.ageSeconds ?? null)}
                   </div>
                 </div>
                 <CardContent className="space-y-3 p-4">

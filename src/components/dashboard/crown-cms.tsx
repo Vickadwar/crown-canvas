@@ -154,6 +154,7 @@ export function CrownCms() {
   const [activeTab, setActiveTab] = useState<NavTab>("overview");
   const [data, setData] = useState<OverviewPayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [showAccountModal, setShowAccountModal] = useState(false);
@@ -229,6 +230,7 @@ export function CrownCms() {
 
       setOverviewError(null);
       setData(payload);
+      setLastSyncedAt(Date.now());
 
       if (payload.departments[0]) {
         const firstDeptId = payload.departments[0].id;
@@ -261,6 +263,32 @@ export function CrownCms() {
       active = false;
     };
   }, [loadOverviewData]);
+
+  // Live Fleet & Overview auto-polling (every 10s while visible) + instant refresh on tab focus
+  // so Online/Degraded/Offline status, Now Playing, and incoming pairing PINs stay 100% live!
+  useEffect(() => {
+    if (activeTab !== "fleet" && activeTab !== "overview") return;
+
+    const silentPoll = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      void loadOverviewData();
+    };
+
+    const interval = setInterval(silentPoll, 10_000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void loadOverviewData();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [activeTab, loadOverviewData]);
 
   const deptById = useMemo(
     () => new Map((data?.departments ?? []).map((d) => [d.id, d])),
@@ -882,7 +910,12 @@ export function CrownCms() {
               )}
 
               {activeTab === "fleet" && (
-                <FleetTab data={data} onRefresh={fetchOverview} />
+                <FleetTab
+                  data={data}
+                  onRefresh={fetchOverview}
+                  onSilentRefresh={loadOverviewData}
+                  lastSyncedAt={lastSyncedAt}
+                />
               )}
 
               {activeTab === "showrooms" && (

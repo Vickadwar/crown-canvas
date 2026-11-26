@@ -1035,10 +1035,12 @@ export function PlayerClient() {
             Authorization: `Bearer ${deviceToken}`,
           },
           body: JSON.stringify({
+            status: "online",
             cacheStatus: syncProgress.status,
             cachedAssetCount: syncProgress.cachedCount,
             storageUsedMb: syncProgress.storageUsedMb,
             appVersion: PLAYER_BUILD_VERSION,
+            resolution: `${window.screen.width}x${window.screen.height}`,
             currentItemTitle: currentItemTitleRef.current,
             executedCommandIds: pendingCommandAckRef.current,
           }),
@@ -1082,9 +1084,33 @@ export function PlayerClient() {
       void sendHeartbeat();
     }, 2500 + (jitter % 2500));
     const hbTimer = setInterval(sendHeartbeat, 30_000 + (jitter % 3000));
+
+    // Report instant offline status when TV tab/browser closes cleanly so Fleet & Pairing
+    // reflects disconnected displays immediately instead of waiting for the 90s timeout.
+    const reportOfflineOnClose = () => {
+      try {
+        void fetch("/api/player/heartbeat", {
+          method: "POST",
+          keepalive: true,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${deviceToken}`,
+          },
+          body: JSON.stringify({
+            status: "offline",
+            currentItemTitle: currentItemTitleRef.current,
+          }),
+        });
+      } catch {
+        // Ignore teardown errors
+      }
+    };
+    window.addEventListener("pagehide", reportOfflineOnClose);
+
     return () => {
       clearTimeout(initialHb);
       clearInterval(hbTimer);
+      window.removeEventListener("pagehide", reportOfflineOnClose);
     };
   }, [
     deviceToken,

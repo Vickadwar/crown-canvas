@@ -396,10 +396,13 @@ export async function GET() {
       })
       .map((scr) => {
         const health = computeScreenHealth(scr.lastHeartbeatAt, nowMs);
+        const explicitlyOffline = scr.isOnline === false;
         return {
           ...scr,
-          isOnline: health.isOnline,
-          healthStatus: health.healthStatus,
+          isOnline: explicitlyOffline ? false : health.isOnline,
+          healthStatus: explicitlyOffline
+            ? ("offline" as const)
+            : health.healthStatus,
           lastSeenSeconds: health.ageSeconds,
         };
       });
@@ -545,6 +548,10 @@ export async function GET() {
         ...pl,
         items: itemsByPlaylist.get(pl.id) ?? [],
       })),
+    }, {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+      },
     });
   } catch (err) {
     console.error("Failed to fetch dashboard overview:", err);

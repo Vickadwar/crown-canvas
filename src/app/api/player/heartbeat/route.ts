@@ -17,12 +17,14 @@ import {
 import { hashDeviceToken } from "@/lib/security";
 
 const heartbeatSchema = z.object({
+  status: z.enum(["online", "offline"]).default("online"),
   cacheStatus: z
     .enum(["pending", "downloading", "synced", "error"])
     .default("synced"),
   cachedAssetCount: z.number().int().nonnegative().default(0),
   storageUsedMb: z.number().int().nonnegative().default(0),
   appVersion: z.string().max(32).optional(),
+  resolution: z.string().max(32).optional(),
   currentItemTitle: z.string().max(200).optional().nullable(),
   snapshotDataUrl: z
     .string()
@@ -70,16 +72,31 @@ export async function POST(request: Request) {
     const data = parsed.success
       ? parsed.data
       : {
+          status: "online" as const,
           cacheStatus: "synced" as const,
           cachedAssetCount: 0,
           storageUsedMb: 0,
           appVersion: undefined,
+          resolution: undefined,
           currentItemTitle: undefined,
           snapshotDataUrl: undefined,
           executedCommandIds: [],
         };
 
     const now = new Date();
+
+    if (data.status === "offline") {
+      await withDbRetry(() =>
+        db
+          .update(screens)
+          .set({
+            isOnline: false,
+            updatedAt: now,
+          })
+          .where(eq(screens.id, screen.id))
+      );
+      return Response.json({ ok: true, status: "offline", serverTime: now.toISOString() });
+    }
 
     await withDbRetry(() =>
       db
@@ -91,6 +108,7 @@ export async function POST(request: Request) {
           cachedAssetCount: data.cachedAssetCount,
           storageUsedMb: data.storageUsedMb,
           appVersion: data.appVersion ?? screen.appVersion,
+          resolution: data.resolution ?? screen.resolution,
           currentItemTitle:
             data.currentItemTitle !== undefined
               ? data.currentItemTitle

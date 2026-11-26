@@ -84,6 +84,8 @@ export interface ScreenItem {
   isOnline: boolean;
   healthStatus?: "online" | "degraded" | "offline";
   lastSeenSeconds?: number | null;
+  appVersion?: string | null;
+  resolution?: string | null;
   cacheStatus: string;
   cachedAssetCount: number;
   storageUsedMb: number;
