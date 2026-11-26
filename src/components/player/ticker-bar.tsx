@@ -140,22 +140,21 @@ export function TickerBar({
   partnerLogos = [],
   partnerMode = "pinned_right",
 }: TickerBarProps) {
-  const [partnerPage, setPartnerPage] = useState(0);
+  const [partnerStep, setPartnerStep] = useState(0);
   const activePartners = partnerLogos.filter((p) => Boolean(p.logoUrl));
-  const maxVisiblePinned = compact ? 2 : 3;
-  const totalPages = Math.max(
-    1,
-    Math.ceil(activePartners.length / maxVisiblePinned)
-  );
+  const shouldRotatePairs =
+    partnerMode !== "hidden" &&
+    partnerMode !== "inline_scroll" &&
+    activePartners.length > 2;
 
-  // Smoothly cycle partner logos on the pinned right rail when >3 partners are active
+  // Rotate cleanly 2 logos at a time every 6s so the tagline bar keeps maximum horizontal space
   useEffect(() => {
-    if (partnerMode !== "pinned_right" || totalPages <= 1) return;
+    if (!shouldRotatePairs) return;
     const timer = setInterval(() => {
-      setPartnerPage((prev) => (prev + 1) % totalPages);
-    }, 8000);
+      setPartnerStep((prev) => prev + 1);
+    }, 6000);
     return () => clearInterval(timer);
-  }, [partnerMode, totalPages]);
+  }, [shouldRotatePairs]);
 
   const parsed = messages
     .map((m) => parseTickerItem(m))
@@ -179,11 +178,13 @@ export function TickerBar({
   const showInlinePartners =
     partnerMode === "inline_scroll" && activePartners.length > 0;
 
-  const safePage = partnerPage % totalPages;
-  const pinnedSlice = activePartners.slice(
-    safePage * maxVisiblePinned,
-    safePage * maxVisiblePinned + maxVisiblePinned
-  );
+  // Always render 2 balanced logos when >2 exist (wrapping cleanly on odd counts so width never jumps)
+  const pinnedSlice: TickerPartnerLogo[] = (() => {
+    const count = activePartners.length;
+    if (count <= 2) return activePartners;
+    const startIdx = (partnerStep * 2) % count;
+    return [activePartners[startIdx], activePartners[(startIdx + 1) % count]];
+  })();
 
   return (
     <footer
@@ -222,10 +223,7 @@ export function TickerBar({
                 i % Math.max(1, Math.floor(items.length / activePartners.length)) === 0 && (() => {
                   const partner = activePartners[i % activePartners.length];
                   return (
-                    <span className="ml-4 inline-flex items-center gap-2 rounded-lg border border-zinc-200/90 bg-zinc-50 px-2.5 py-1 shadow-2xs">
-                      <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-400">
-                        Partner
-                      </span>
+                    <span className="ml-4 inline-flex items-center rounded-lg border border-zinc-200/90 bg-zinc-50 px-2.5 py-1 shadow-2xs">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={partner.logoUrl}
@@ -244,26 +242,23 @@ export function TickerBar({
         </div>
       </div>
 
-      {/* Pinned Equal-Height Official Partners Showcase Rail */}
+      {/* Pinned Compact 2-Logo Rotating Showcase Rail (Brand & Partner Logos — No Label) */}
       {showPinnedPartners && (
         <div
-          className={`z-10 flex h-full shrink-0 items-center gap-3 border-l border-zinc-200 bg-gradient-to-l from-zinc-50 via-white to-white ${
-            compact ? "px-3" : "px-4"
+          className={`z-10 flex h-full shrink-0 items-center border-l border-zinc-200 bg-gradient-to-l from-zinc-50 via-white to-white ${
+            compact ? "px-2.5" : "px-3.5"
           }`}
         >
-          <span className="hidden text-[9px] font-bold uppercase tracking-widest text-zinc-400 sm:inline">
-            {activePartners.length === 1 ? "Partner" : "Partners"}
-          </span>
           <div
-            key={`partner-page-${safePage}`}
-            className="animate-crown-slide flex items-center gap-2.5"
+            key={`logo-pair-${pinnedSlice.map((p) => p.id).join("-")}`}
+            className="animate-crown-slide flex items-center gap-2"
           >
             {pinnedSlice.map((partner) => (
               <div
                 key={partner.id}
                 title={partner.name}
-                className={`flex items-center justify-center rounded-lg border border-zinc-200/80 bg-white px-2.5 shadow-2xs ${
-                  compact ? "h-9 max-w-[98px]" : "h-11 max-w-[124px]"
+                className={`flex items-center justify-center rounded-lg border border-zinc-200/80 bg-white px-2 shadow-2xs ${
+                  compact ? "h-9 w-[92px]" : "h-11 w-[112px]"
                 }`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -272,8 +267,8 @@ export function TickerBar({
                   alt={partner.name}
                   className={
                     compact
-                      ? "h-6 w-auto max-w-[82px] object-contain"
-                      : "h-8 w-auto max-w-[106px] object-contain"
+                      ? "h-6 w-auto max-w-[78px] object-contain"
+                      : "h-8 w-auto max-w-[96px] object-contain"
                   }
                 />
               </div>
