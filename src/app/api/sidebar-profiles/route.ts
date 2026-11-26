@@ -33,6 +33,8 @@ const createProfileSchema = z.object({
   qrTitle: z.string().trim().max(100).nullable().optional(),
   promoLabel: z.string().trim().max(200).nullable().optional(),
   qrTargetUrl: z.string().trim().url().nullable().optional().or(z.literal("")),
+  qrTrackingMode: z.enum(["direct", "tracked"]).default("direct"),
+  qrShowLogo: z.boolean().default(true),
   slideIntervalSeconds: z.number().int().min(3).max(60).default(6),
   productIds: z.array(z.string().uuid()).default([]),
   isDefault: z.boolean().default(false),
@@ -112,6 +114,8 @@ export async function POST(request: Request) {
             parsed.data.promoLabel?.trim() ||
             "Scan to browse Crown Decorative paints & shades.",
           qrTargetUrl: qrTarget,
+          qrTrackingMode: parsed.data.qrTrackingMode,
+          qrShowLogo: parsed.data.qrShowLogo,
           slideIntervalSeconds: parsed.data.slideIntervalSeconds,
           productIds: parsed.data.productIds,
           isDefault: parsed.data.isDefault,

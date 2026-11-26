@@ -305,6 +305,12 @@ export function canAccessTab(
       );
     case "playlists":
       return permissions.includes("playlists:manage");
+    case "promotions":
+    case "recognitions":
+      return (
+        permissions.includes("playlists:manage") ||
+        permissions.includes("media:upload")
+      );
     case "schedules":
       return permissions.includes("schedules:manage");
     case "broadcasts":

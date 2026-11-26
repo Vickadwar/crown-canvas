@@ -18,6 +18,8 @@ import {
   Users,
 } from "lucide-react";
 import type { QuickPostSlideConfig } from "@/db/schema";
+import { CROWN_OFFICIAL_LOGO_URL } from "@/lib/crown-products";
+import { resolveQrCodeValue } from "@/lib/qr-url";
 import { CanvasRenderer } from "./canvas-renderer";
 import { SalesAnalyticsSlide } from "./sales-analytics-slide";
 
@@ -131,22 +133,15 @@ export function QuickPostSlide({
 
   const qrDestination = (() => {
     if (!config.qrUrl) return "";
-    if (!screenId || !quickPostId || typeof window === "undefined") {
-      return config.qrUrl;
-    }
-    const isLocal =
-      window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1";
-    const configuredBase = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(
-      /\/+$/,
-      ""
-    );
-    const origin =
-      isLocal && configuredBase && !configuredBase.includes("localhost")
-        ? configuredBase
-        : window.location.origin;
-    const params = new URLSearchParams({ p: quickPostId, s: screenId });
-    return `${origin}/q/sl?${params.toString()}`;
+    return resolveQrCodeValue({
+      destinationUrl: config.qrUrl,
+      mode: config.qrTrackingMode ?? "direct",
+      kind: "slide",
+      screenId,
+      quickPostId,
+      currentOrigin: typeof window !== "undefined" ? window.location.origin : "",
+      configuredAppUrl: process.env.NEXT_PUBLIC_APP_URL,
+    });
   })();
 
   return (
@@ -390,11 +385,21 @@ export function QuickPostSlide({
                 >
                   <QRCodeSVG
                     value={qrDestination || config.qrUrl}
-                    size={compact ? 84 : 188}
-                    level="M"
+                    size={compact ? 88 : 196}
+                    level="H"
                     marginSize={2}
                     bgColor="#ffffff"
                     fgColor="#000000"
+                    imageSettings={
+                      config.qrShowLogo !== false
+                        ? {
+                            src: CROWN_OFFICIAL_LOGO_URL,
+                            height: compact ? 20 : 42,
+                            width: compact ? 20 : 42,
+                            excavate: true,
+                          }
+                        : undefined
+                    }
                   />
                 </div>
                 <span

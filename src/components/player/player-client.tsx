@@ -40,6 +40,7 @@ import {
   clearPlayerMediaCache,
   resolveAssetPlaybackUrl,
   syncMediaAssetsToDisk,
+  type ManifestAssetRef,
   type SyncProgress,
 } from "@/lib/player/cache-engine";
 import {
@@ -63,19 +64,23 @@ import {
   createSupabaseBrowserClient,
   isSupabaseConfigured,
 } from "@/lib/supabase/client";
+import { EmployeeSpotlightSlide } from "./employee-spotlight-slide";
 import {
   MultiZoneFrame,
   type ActiveSidebarProfile,
 } from "./multi-zone-frame";
 import { PdfSignageViewer } from "./pdf-signage-viewer";
 import { QuickPostSlide } from "./quick-post-slide";
-import { TickerBar } from "./ticker-bar";
+import { TickerBar, type TickerPartnerLogo } from "./ticker-bar";
 
 type PlayerItem =
   | {
     id: string;
     kind: "media_asset";
     assetId: string;
+    isPromotion?: boolean;
+    promotionId?: string;
+    agencyName?: string;
     title: string;
     mediaType: "video" | "image" | "web_url" | "pdf";
     publicUrl: string;
@@ -84,6 +89,8 @@ type PlayerItem =
     durationSeconds: number;
     departmentCode: string;
     departmentName: string;
+    audioTrackUrl?: string | null;
+    audioVolumePercent?: number | null;
   }
   | {
     id: string;
@@ -96,6 +103,27 @@ type PlayerItem =
     departmentCode: string;
     departmentName: string;
     accentColor?: string;
+    audioTrackUrl?: string | null;
+    audioVolumePercent?: number | null;
+  }
+  | {
+    id: string;
+    kind: "employee_recognition";
+    recognitionId: string;
+    title: string;
+    employeeName: string;
+    locationName: string;
+    departmentName: string;
+    awardPeriodType: "month" | "quarter" | "year" | "special";
+    awardPeriodLabel: string;
+    citation: string;
+    avatarStyle: "illustrated" | "geometric" | "crown_badge";
+    avatarSeed: string;
+    accentColor: string;
+    durationSeconds: number;
+    departmentCode: string;
+    audioTrackUrl?: string | null;
+    audioVolumePercent?: number | null;
   };
 
 interface PlayerManifest {
@@ -130,7 +158,12 @@ interface PlayerManifest {
     tickerText?: string | null;
     sidebarConfig?: PlaylistSidebarConfig | null;
     sidebarProfileId?: string | null;
+    audioTrackUrl?: string | null;
+    audioVolumePercent?: number | null;
+    showPartnerLogos?: boolean;
+    partnerTickerMode?: "pinned_right" | "inline_scroll" | "hidden" | string;
   } | null;
+  partnerLogos?: TickerPartnerLogo[];
   sidebarProfile?: ActiveSidebarProfile | null;
   showcaseProducts?: CrownProductItem[];
   qrSignatures?: Record<string, string>;
@@ -261,6 +294,8 @@ export function PlayerClient() {
   const manifestEtagRef = useRef<string | null>(null);
   const currentItemTitleRef = useRef<string | null>(null);
   const activeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const bgAudioRef = useRef<HTMLAudioElement | null>(null);
+  const deviceJitterMsRef = useRef<number>(0);
   const tvProfileRef = useRef<TvDeviceProfile>(DEFAULT_TV_PROFILE);
   const remoteHudTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const branchHoursRef = useRef<{
@@ -285,6 +320,7 @@ export function PlayerClient() {
 
   // 1. Initialize stored device token, PWA Service Worker, clock, operating hours & Wake Lock
   useEffect(() => {
+    deviceJitterMsRef.current = Math.floor(Math.random() * 4500);
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => {
         // Non-fatal in dev or restricted webviews
@@ -673,7 +709,7 @@ export function PlayerClient() {
           setStandbyReason("");
         }
 
-        const mediaRefs = data.items
+        const mediaRefs: ManifestAssetRef[] = data.items
           .filter(
             (item): item is Extract<PlayerItem, { kind: "media_asset" }> =>
               item.kind === "media_asset"
@@ -686,14 +722,26 @@ export function PlayerClient() {
             mediaType: item.mediaType,
           }));
 
-        // Also cache Sidebar Showcase Product images & Studio Slide images once on disk
+        // Also cache Sidebar Showcase Product images, Partner Logos, Studio Slide images & Background Audio once on disk
         const extraImageUrls = new Map<string, string>();
         for (const prod of data.showcaseProducts ?? []) {
           if (prod.imageUrl && prod.imageUrl.startsWith("http")) {
             extraImageUrls.set(`prod-${prod.id}`, prod.imageUrl);
           }
         }
+        for (const partner of data.partnerLogos ?? []) {
+          if (partner.logoUrl && partner.logoUrl.startsWith("http")) {
+            extraImageUrls.set(`partner-${partner.id}`, partner.logoUrl);
+          }
+        }
+        const extraAudioUrls = new Map<string, string>();
+        if (data.playlist?.audioTrackUrl && data.playlist.audioTrackUrl.startsWith("http")) {
+          extraAudioUrls.set(`audio-pl-${data.playlist.id}`, data.playlist.audioTrackUrl);
+        }
         for (const item of data.items) {
+          if (item.audioTrackUrl && item.audioTrackUrl.startsWith("http")) {
+            extraAudioUrls.set(`audio-item-${item.id}`, item.audioTrackUrl);
+          }
           if (item.kind !== "quick_post") continue;
           const cfg = item.slideConfig;
           if (
@@ -720,6 +768,15 @@ export function PlayerClient() {
             mediaType: "image",
           });
         }
+        for (const [id, url] of extraAudioUrls.entries()) {
+          mediaRefs.push({
+            assetId: id,
+            sha256Checksum: url.slice(-24),
+            publicUrl: url,
+            mimeType: "audio/mpeg",
+            mediaType: "audio",
+          });
+        }
 
         await syncMediaAssetsToDisk(
           mediaRefs,
@@ -736,12 +793,14 @@ export function PlayerClient() {
 
   useEffect(() => {
     if (!deviceToken) return;
+    const jitter = deviceJitterMsRef.current;
     const initialTimer = setTimeout(() => {
       void syncManifest(deviceToken, true);
     }, 0);
+    // Jittered 60s–64.5s refresh prevents 100+ TVs from stampeding the API simultaneously
     const refreshTimer = setInterval(() => {
       void syncManifest(deviceToken);
-    }, 60_000);
+    }, 60_000 + jitter);
     return () => {
       clearTimeout(initialTimer);
       clearInterval(refreshTimer);
@@ -757,7 +816,11 @@ export function PlayerClient() {
       const channel = supabase
         .channel("crown-canvas-fleet")
         .on("broadcast", { event: "manifest_refresh" }, () => {
-          void syncManifest(deviceToken, true);
+          // Stagger non-emergency fleet refreshes by 300ms-2800ms so 100 TVs never hit DB at the exact same millisecond
+          const delay = 300 + (deviceJitterMsRef.current % 2500);
+          setTimeout(() => {
+            void syncManifest(deviceToken, true);
+          }, delay);
         })
         .on("broadcast", { event: "emergency_override" }, () => {
           void syncManifest(deviceToken, true);
@@ -899,10 +962,11 @@ export function PlayerClient() {
       }
     };
 
+    const jitter = deviceJitterMsRef.current;
     const initialHb = setTimeout(() => {
       void sendHeartbeat();
-    }, 3000);
-    const hbTimer = setInterval(sendHeartbeat, 30_000);
+    }, 2500 + (jitter % 2500));
+    const hbTimer = setInterval(sendHeartbeat, 30_000 + (jitter % 3000));
     return () => {
       clearTimeout(initialHb);
       clearInterval(hbTimer);
@@ -1202,8 +1266,86 @@ export function PlayerClient() {
     void attemptPlay();
     return () => {
       cancelled = true;
+      // Explicitly release hardware H.264/HEVC video decoder & GPU frame buffers on low-RAM Smart TVs
+      // (Samsung Tizen, LG webOS, Hisense VIDAA, Android TV) to prevent memory leaks over 24/7 playback.
+      try {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      } catch {
+        // Ignore cleanup errors on older TV engines
+      }
     };
   }, [currentItem, safeIndex, currentPlaybackUrl, isMuted, corsFallbackKey]);
+
+  // Ambient Background Music Engine (Cloudflare R2 MP3/AAC) with Smart Auto-Ducking:
+  // Plays softly during silent images, agency Promotions, Studio slides & Employee Spotlights,
+  // and automatically pauses whenever a Video, Web stream, Emergency Broadcast, Standby, or Mute is active.
+  useEffect(() => {
+    const audio = bgAudioRef.current;
+    if (!audio) return;
+
+    const itemIsSilentVisual =
+      Boolean(currentItem) &&
+      (currentItem?.kind === "quick_post" ||
+        currentItem?.kind === "employee_recognition" ||
+        (currentItem?.kind === "media_asset" &&
+          (currentItem.mediaType === "image" || currentItem.mediaType === "pdf")));
+
+    const blockedByState =
+      demoMode ||
+      Boolean(manifest?.screenPaused) ||
+      Boolean(
+        manifest?.emergencyOverride &&
+          manifest.emergencyOverride.overrideKind !== "playlist"
+      ) ||
+      (isStandby && !standbyBypass) ||
+      isMuted ||
+      audioBlocked ||
+      !itemIsSilentVisual;
+
+    const effectiveUrl =
+      currentItem?.audioTrackUrl?.trim() ||
+      manifest?.playlist?.audioTrackUrl?.trim() ||
+      null;
+    const rawVol =
+      currentItem?.audioVolumePercent ??
+      manifest?.playlist?.audioVolumePercent ??
+      35;
+    const clampedVol = Math.max(0.05, Math.min(1, Number(rawVol) / 100));
+
+    if (blockedByState || !effectiveUrl) {
+      if (!audio.paused) {
+        audio.pause();
+      }
+      return;
+    }
+
+    audio.volume = clampedVol;
+    audio.muted = false;
+    if (audio.dataset.trackUrl !== effectiveUrl) {
+      audio.dataset.trackUrl = effectiveUrl;
+      audio.src = effectiveUrl;
+      audio.load();
+    }
+    void audio.play().catch((err) => {
+      const errName = err instanceof DOMException ? err.name : "";
+      if (errName === "NotAllowedError") {
+        setAudioBlocked(true);
+      }
+    });
+  }, [
+    currentItem,
+    demoMode,
+    manifest?.screenPaused,
+    manifest?.emergencyOverride,
+    manifest?.playlist?.audioTrackUrl,
+    manifest?.playlist?.audioVolumePercent,
+    isStandby,
+    standbyBypass,
+    isMuted,
+    audioBlocked,
+  ]);
 
   // Self-Healing Video Stall Watchdog: recovers or skips frozen clips on flaky Smart TV Wi-Fi
   useEffect(() => {
@@ -1580,6 +1722,19 @@ export function PlayerClient() {
         Waiting for a playlist or schedule to be assigned in Crown Canvas CMS.
       </p>
     </div>
+  ) : currentItem.kind === "employee_recognition" ? (
+    <EmployeeSpotlightSlide
+      key={`${currentItem.id}-${safeIndex}`}
+      employeeName={currentItem.employeeName}
+      locationName={currentItem.locationName}
+      departmentName={currentItem.departmentName}
+      awardPeriodType={currentItem.awardPeriodType}
+      awardPeriodLabel={currentItem.awardPeriodLabel}
+      citation={currentItem.citation}
+      avatarStyle={currentItem.avatarStyle}
+      avatarSeed={currentItem.avatarSeed}
+      accentColor={currentItem.accentColor}
+    />
   ) : currentItem.kind === "quick_post" ? (
     <QuickPostSlide
       key={`${currentItem.id}-${safeIndex}`}
@@ -1698,6 +1853,15 @@ export function PlayerClient() {
       className={`relative h-screen w-screen overflow-hidden bg-black text-white select-none ${cursorHidden ? "player-cursor-hidden" : ""
         }`}
     >
+      {/* Persistent Background Music Engine (Auto-Ducks on Video/Broadcast/Standby) */}
+      <audio
+        ref={bgAudioRef}
+        loop
+        preload="auto"
+        className="hidden"
+        aria-hidden="true"
+      />
+
       {/* Dual-Buffer Next-Video Preloader (Mini PCs / Desktops only — disabled on Smart TVs to protect single hardware H.264 decoder) */}
       {isNormalPlayback &&
         !tvProfile.singleVideoDecoder &&
@@ -1869,6 +2033,14 @@ export function PlayerClient() {
             manifest?.tickerMessages ??
             DEMO_QUICK_POSTS.map((p) => `${p.departmentName}: ${p.title}`)
           }
+          partnerLogos={
+            manifest?.playlist?.showPartnerLogos !== false
+              ? (manifest?.partnerLogos ?? [])
+              : []
+          }
+          partnerTickerMode={
+            manifest?.playlist?.partnerTickerMode ?? "pinned_right"
+          }
         >
           {mainStageContent}
         </MultiZoneFrame>
@@ -1877,7 +2049,17 @@ export function PlayerClient() {
           <div className="relative min-h-0 flex-1 overflow-hidden">
             {mainStageContent}
           </div>
-          <TickerBar messages={manifest?.tickerMessages ?? []} />
+          <TickerBar
+            messages={manifest?.tickerMessages ?? []}
+            partnerLogos={
+              manifest?.playlist?.showPartnerLogos !== false
+                ? (manifest?.partnerLogos ?? [])
+                : []
+            }
+            partnerMode={
+              manifest?.playlist?.partnerTickerMode ?? "pinned_right"
+            }
+          />
         </div>
       ) : (
         mainStageContent

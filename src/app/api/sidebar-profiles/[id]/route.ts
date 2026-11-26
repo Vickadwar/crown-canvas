@@ -28,6 +28,8 @@ const patchProfileSchema = z.object({
   qrTitle: z.string().trim().max(100).nullable().optional(),
   promoLabel: z.string().trim().max(200).nullable().optional(),
   qrTargetUrl: z.string().trim().url().nullable().optional().or(z.literal("")),
+  qrTrackingMode: z.enum(["direct", "tracked"]).optional(),
+  qrShowLogo: z.boolean().optional(),
   slideIntervalSeconds: z.number().int().min(3).max(60).optional(),
   productIds: z.array(z.string().uuid()).optional(),
   isDefault: z.boolean().optional(),
@@ -95,6 +97,12 @@ export async function PATCH(
                   ? parsed.data.qrTargetUrl.trim()
                   : null,
               }
+            : {}),
+          ...(parsed.data.qrTrackingMode !== undefined
+            ? { qrTrackingMode: parsed.data.qrTrackingMode }
+            : {}),
+          ...(parsed.data.qrShowLogo !== undefined
+            ? { qrShowLogo: parsed.data.qrShowLogo }
             : {}),
           ...(parsed.data.slideIntervalSeconds !== undefined
             ? { slideIntervalSeconds: parsed.data.slideIntervalSeconds }

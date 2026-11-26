@@ -7,6 +7,7 @@
  * WhatsApp, and corporate vector icons.
  */
 
+import { useEffect, useState } from "react";
 import {
   Award,
   Globe,
@@ -21,9 +22,18 @@ import {
 import { CROWN_OFFICIAL_LOGO_URL } from "@/lib/crown-products";
 import { parseTickerItem, type TickerIconKey } from "@/lib/ticker-parser";
 
+export interface TickerPartnerLogo {
+  id: string;
+  name: string;
+  logoUrl: string;
+  tagline?: string | null;
+}
+
 interface TickerBarProps {
   messages: string[];
   compact?: boolean;
+  partnerLogos?: TickerPartnerLogo[];
+  partnerMode?: "pinned_right" | "inline_scroll" | "hidden" | string;
 }
 
 function GooglePlayBadge() {
@@ -124,7 +134,29 @@ export function TickerIconBadge({ icon }: { icon: TickerIconKey }) {
   }
 }
 
-export function TickerBar({ messages, compact = false }: TickerBarProps) {
+export function TickerBar({
+  messages,
+  compact = false,
+  partnerLogos = [],
+  partnerMode = "pinned_right",
+}: TickerBarProps) {
+  const [partnerPage, setPartnerPage] = useState(0);
+  const activePartners = partnerLogos.filter((p) => Boolean(p.logoUrl));
+  const maxVisiblePinned = compact ? 2 : 3;
+  const totalPages = Math.max(
+    1,
+    Math.ceil(activePartners.length / maxVisiblePinned)
+  );
+
+  // Smoothly cycle partner logos on the pinned right rail when >3 partners are active
+  useEffect(() => {
+    if (partnerMode !== "pinned_right" || totalPages <= 1) return;
+    const timer = setInterval(() => {
+      setPartnerPage((prev) => (prev + 1) % totalPages);
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [partnerMode, totalPages]);
+
   const parsed = messages
     .map((m) => parseTickerItem(m))
     .filter((item) => item.text.length > 0);
@@ -139,6 +171,19 @@ export function TickerBar({ messages, compact = false }: TickerBarProps) {
             text: "Precision Colour Tinting in 1,800+ Designer Shades",
           },
         ];
+
+  const showPinnedPartners =
+    partnerMode !== "hidden" &&
+    partnerMode !== "inline_scroll" &&
+    activePartners.length > 0;
+  const showInlinePartners =
+    partnerMode === "inline_scroll" && activePartners.length > 0;
+
+  const safePage = partnerPage % totalPages;
+  const pinnedSlice = activePartners.slice(
+    safePage * maxVisiblePinned,
+    safePage * maxVisiblePinned + maxVisiblePinned
+  );
 
   return (
     <footer
@@ -158,7 +203,8 @@ export function TickerBar({ messages, compact = false }: TickerBarProps) {
           className={compact ? "h-10 w-auto object-contain" : "h-12 w-auto object-contain"}
         />
       </div>
-      <div className="flex-1 overflow-hidden">
+
+      <div className="min-w-0 flex-1 overflow-hidden">
         <div
           className={`animate-crown-ticker items-center gap-12 px-6 font-semibold text-zinc-900 ${
             compact ? "text-xs" : "text-[15px]"
@@ -171,10 +217,70 @@ export function TickerBar({ messages, compact = false }: TickerBarProps) {
             >
               <TickerIconBadge icon={item.icon} />
               <span>{item.text}</span>
+              {showInlinePartners &&
+                activePartners.length > 0 &&
+                i % Math.max(1, Math.floor(items.length / activePartners.length)) === 0 && (() => {
+                  const partner = activePartners[i % activePartners.length];
+                  return (
+                    <span className="ml-4 inline-flex items-center gap-2 rounded-lg border border-zinc-200/90 bg-zinc-50 px-2.5 py-1 shadow-2xs">
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-400">
+                        Partner
+                      </span>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={partner.logoUrl}
+                        alt={partner.name}
+                        className={
+                          compact
+                            ? "h-6 w-auto max-w-[90px] object-contain"
+                            : "h-8 w-auto max-w-[116px] object-contain"
+                        }
+                      />
+                    </span>
+                  );
+                })()}
             </span>
           ))}
         </div>
       </div>
+
+      {/* Pinned Equal-Height Official Partners Showcase Rail */}
+      {showPinnedPartners && (
+        <div
+          className={`z-10 flex h-full shrink-0 items-center gap-3 border-l border-zinc-200 bg-gradient-to-l from-zinc-50 via-white to-white ${
+            compact ? "px-3" : "px-4"
+          }`}
+        >
+          <span className="hidden text-[9px] font-bold uppercase tracking-widest text-zinc-400 sm:inline">
+            {activePartners.length === 1 ? "Partner" : "Partners"}
+          </span>
+          <div
+            key={`partner-page-${safePage}`}
+            className="animate-crown-slide flex items-center gap-2.5"
+          >
+            {pinnedSlice.map((partner) => (
+              <div
+                key={partner.id}
+                title={partner.name}
+                className={`flex items-center justify-center rounded-lg border border-zinc-200/80 bg-white px-2.5 shadow-2xs ${
+                  compact ? "h-9 max-w-[98px]" : "h-11 max-w-[124px]"
+                }`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={partner.logoUrl}
+                  alt={partner.name}
+                  className={
+                    compact
+                      ? "h-6 w-auto max-w-[82px] object-contain"
+                      : "h-8 w-auto max-w-[106px] object-contain"
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </footer>
   );
 }

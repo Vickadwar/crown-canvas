@@ -13,6 +13,7 @@ export * from "./assets";
 export * from "./studio";
 export * from "./schedules";
 export * from "./analytics";
+export * from "./campaigns";
 
 import { countries, regions, branches } from "./locations";
 import { departments } from "./departments";

@@ -41,9 +41,14 @@ import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { CROWN_DECORATIVE_QR_URL } from "@/lib/crown-products";
-import { normalizeProductImageForSidebar } from "@/lib/media-optimizer";
+import {
+  normalizePartnerLogoForTicker,
+  normalizeProductImageForSidebar,
+} from "@/lib/media-optimizer";
+import { TickerBar } from "@/components/player/ticker-bar";
 import type {
   OverviewPayload,
+  PartnerLogoItem,
   ShowcaseProductItem,
   SidebarProfileItem,
 } from "./cms-types";
@@ -134,6 +139,8 @@ const BUILTIN_DEFAULT_SIDEBAR: SidebarProfileItem = {
   qrTitle: "Explore Decorative Range",
   promoLabel: "Scan to browse Crown Decorative paints & shades.",
   qrTargetUrl: CROWN_DECORATIVE_QR_URL,
+  qrTrackingMode: "direct",
+  qrShowLogo: true,
   slideIntervalSeconds: 6,
   productIds: [],
   isDefault: true,
@@ -206,6 +213,12 @@ export function SidebarProfilesPanel({
   const [qrTargetUrl, setQrTargetUrl] = useState(
     initialEditProfile?.qrTargetUrl ?? CROWN_DECORATIVE_QR_URL
   );
+  const [qrTrackingMode, setQrTrackingMode] = useState<"direct" | "tracked">(
+    initialEditProfile?.qrTrackingMode === "tracked" ? "tracked" : "direct"
+  );
+  const [qrShowLogo, setQrShowLogo] = useState(
+    initialEditProfile?.qrShowLogo !== false
+  );
   const [slideIntervalSeconds, setSlideIntervalSeconds] = useState(
     initialEditProfile?.slideIntervalSeconds ?? 6
   );
@@ -247,6 +260,8 @@ export function SidebarProfilesPanel({
     setQrTitle("Explore Decorative Range");
     setPromoLabel("Scan to browse Crown Decorative paints & shades.");
     setQrTargetUrl(CROWN_DECORATIVE_QR_URL);
+    setQrTrackingMode("direct");
+    setQrShowLogo(true);
     setSlideIntervalSeconds(6);
     setSelectedProductIds([]);
     setIsDefault(!hasPersistedDefault);
@@ -266,6 +281,8 @@ export function SidebarProfilesPanel({
     setQrTitle(p.qrTitle ?? "Explore Decorative Range");
     setPromoLabel(p.promoLabel ?? "");
     setQrTargetUrl(p.qrTargetUrl ?? CROWN_DECORATIVE_QR_URL);
+    setQrTrackingMode(p.qrTrackingMode === "tracked" ? "tracked" : "direct");
+    setQrShowLogo(p.qrShowLogo !== false);
     setSlideIntervalSeconds(p.slideIntervalSeconds ?? 6);
     setSelectedProductIds(p.productIds ?? []);
     setIsDefault(asClone ? false : p.isDefault);
@@ -290,6 +307,8 @@ export function SidebarProfilesPanel({
         qrTitle: qrTitle.trim() || "Explore Decorative Range",
         promoLabel: promoLabel.trim() || null,
         qrTargetUrl: qrTargetUrl.trim() || CROWN_DECORATIVE_QR_URL,
+        qrTrackingMode,
+        qrShowLogo,
         slideIntervalSeconds: Math.max(3, Math.min(60, Number(slideIntervalSeconds) || 6)),
         productIds: selectedProductIds,
         isDefault:
@@ -487,8 +506,35 @@ export function SidebarProfilesPanel({
                     checked={showQr}
                     onChange={(e) => setShowQr(e.target.checked)}
                   />
-                  Show Auto-Tracked QR Card
+                  Show QR Card
                 </label>
+                <label className="flex items-center gap-1.5 font-medium text-zinc-700">
+                  <input
+                    type="checkbox"
+                    checked={qrShowLogo}
+                    onChange={(e) => setQrShowLogo(e.target.checked)}
+                  />
+                  Crown Logo in QR Center
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <Label className="text-[11px] text-zinc-500">QR Link Preview:</Label>
+                  <select
+                    value={qrTrackingMode}
+                    onChange={(e) =>
+                      setQrTrackingMode(
+                        e.target.value === "tracked" ? "tracked" : "direct"
+                      )
+                    }
+                    className="h-7 rounded-md border border-zinc-200 bg-white px-2 text-[11px] font-medium text-zinc-800"
+                  >
+                    <option value="direct">
+                      Direct Destination URL (Shows crownpaints.co.ke)
+                    </option>
+                    <option value="tracked">
+                      Tracked Redirect (Logs scans in Analytics)
+                    </option>
+                  </select>
+                </div>
                 <label className="flex items-center gap-1.5 font-medium text-zinc-700">
                   <input
                     type="checkbox"
@@ -1199,6 +1245,293 @@ export function ShowcaseProductsPanel({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// 3. OFFICIAL PARTNER LOGOS PANEL (Normalized Equal-Height Ticker Badges)
+// =============================================================================
+
+export function PartnerLogosPanel({
+  data,
+  onRefresh,
+}: {
+  data: OverviewPayload;
+  onRefresh: () => Promise<void>;
+}) {
+  const confirm = useConfirm();
+  const partners = useMemo(() => data.partnerLogos ?? [], [data.partnerLogos]);
+  const [name, setName] = useState("");
+  const [tagline, setTagline] = useState("");
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function handleAddPartner(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !logoFile) {
+      toast.error("Enter the partner brand name and attach their logo file.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const normalized = await normalizePartnerLogoForTicker(logoFile);
+      const uploadFile = normalized.file;
+      const sha256Checksum = await computeSha256(uploadFile);
+
+      const urlRes = await fetch("/api/media/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName: uploadFile.name,
+          mimeType: uploadFile.type || "image/webp",
+          departmentCode: "PARTNERS",
+          sha256Checksum,
+          fileSizeBytes: uploadFile.size,
+        }),
+      });
+      const urlJson = (await urlRes.json()) as {
+        error?: string;
+        deduplicated?: boolean;
+        signedUrl?: string;
+        uploadHeaders?: Record<string, string>;
+        publicUrl?: string;
+        storagePath?: string;
+      };
+      if (!urlRes.ok || !urlJson.publicUrl || !urlJson.storagePath) {
+        throw new Error(urlJson.error || "Could not prepare R2 upload");
+      }
+      if (!urlJson.deduplicated && urlJson.signedUrl) {
+        const putRes = await fetch(urlJson.signedUrl, {
+          method: "PUT",
+          headers: urlJson.uploadHeaders ?? {
+            "Content-Type": uploadFile.type || "image/webp",
+          },
+          body: uploadFile,
+        });
+        if (!putRes.ok) throw new Error("Partner logo upload failed");
+      }
+
+      const res = await fetch("/api/partner-logos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          logoUrl: urlJson.publicUrl,
+          storagePath: urlJson.storagePath,
+          tagline: tagline.trim() || null,
+          sortOrder: partners.length,
+        }),
+      });
+      const j = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        toast.error(j.error || "Failed to save partner logo");
+        return;
+      }
+
+      toast.success(
+        `Uploaded & normalized "${name.trim()}" logo for equal-height TV ticker display`
+      );
+      setName("");
+      setTagline("");
+      setLogoFile(null);
+      setPreviewUrl("");
+      await onRefresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleToggle(p: PartnerLogoItem) {
+    const res = await fetch(`/api/partner-logos/${p.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isActive: !p.isActive }),
+    });
+    if (!res.ok) {
+      toast.error("Failed to update partner visibility");
+      return;
+    }
+    toast.success(p.isActive ? `Hidden "${p.name}"` : `Activated "${p.name}"`);
+    await onRefresh();
+  }
+
+  async function handleDelete(p: PartnerLogoItem) {
+    const ok = await confirm({
+      title: `Remove partner "${p.name}"?`,
+      description:
+        "This removes the partner logo from the bottom ticker bar and deletes it from Cloudflare R2.",
+      confirmLabel: "Remove Partner",
+      variant: "danger",
+    });
+    if (!ok) return;
+    const res = await fetch(`/api/partner-logos/${p.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      toast.error("Failed to delete partner logo");
+      return;
+    }
+    toast.success(`Removed "${p.name}"`);
+    await onRefresh();
+  }
+
+  const activeLogos = partners
+    .filter((p) => p.isActive)
+    .map((p) => ({ id: p.id, name: p.name, logoUrl: p.logoUrl, tagline: p.tagline }));
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-zinc-200 bg-white">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">
+            Upload Official Partner Logo (Auto-Normalized Equal Size)
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Upload any partner PNG/JPG/WebP logo (wide horizontal like Fevicol, square, or vertical). Crown Canvas trims excess margins automatically and preserves 100% original aspect ratio &amp; sharpness at uniform optical height in the TV bottom ticker bar.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form
+            onSubmit={handleAddPartner}
+            className="grid items-end gap-3 md:grid-cols-12"
+          >
+            <div className="space-y-1 md:col-span-3">
+              <Label className="text-xs">Partner Name</Label>
+              <Input
+                className="h-8 text-xs"
+                placeholder="e.g. Fevicol"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-1 md:col-span-3">
+              <Label className="text-xs">Short Label (Optional)</Label>
+              <Input
+                className="h-8 text-xs"
+                placeholder="e.g. Official Adhesives Partner"
+                value={tagline}
+                onChange={(e) => setTagline(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1 md:col-span-4">
+              <Label className="text-xs">Partner Logo File (PNG / WebP / JPG)</Label>
+              <Input
+                type="file"
+                accept="image/*"
+                className="h-8 cursor-pointer text-xs"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  setLogoFile(f);
+                  if (f) setPreviewUrl(URL.createObjectURL(f));
+                  else setPreviewUrl("");
+                }}
+                required
+              />
+            </div>
+            <div className="md:col-span-2">
+              <Button type="submit" size="sm" className="w-full" disabled={saving}>
+                <Upload className="size-3.5" />
+                {saving ? "Normalizing..." : "Upload Logo"}
+              </Button>
+            </div>
+            {previewUrl && (
+              <div className="flex items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 md:col-span-12">
+                <span className="text-[11px] font-medium text-zinc-500">
+                  Selected Preview:
+                </span>
+                <div className="flex h-10 items-center justify-center rounded-md border border-zinc-200 bg-white px-2.5">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={previewUrl}
+                    alt="Partner preview"
+                    className="h-7 w-auto max-w-[110px] object-contain"
+                  />
+                </div>
+              </div>
+            )}
+          </form>
+        </CardContent>
+      </Card>
+
+      {/* Live Simulated TV Ticker Preview */}
+      {activeLogos.length > 0 && (
+        <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xs">
+          <div className="border-b border-zinc-100 bg-zinc-50 px-3.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+            Live TV Bottom Tagline Bar Preview (Pinned Right Partners Rail)
+          </div>
+          <TickerBar
+            messages={[
+              "[paint] Precision Colour Tinting in 1,800+ Designer Shades",
+              "[sparkles] If you like it... Crown it!",
+            ]}
+            partnerLogos={activeLogos}
+            partnerMode="pinned_right"
+          />
+        </div>
+      )}
+
+      {partners.length === 0 ? (
+        <Card>
+          <CardContent className="p-10 text-center text-xs text-zinc-500">
+            No partner logos uploaded yet. Upload your first partner logo (e.g. Fevicol) above to showcase it cleanly in the bottom tagline bar!
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {partners.map((p) => (
+            <Card
+              key={p.id}
+              className={`border-zinc-200 bg-white ${!p.isActive ? "opacity-60" : ""}`}
+            >
+              <CardContent className="space-y-2.5 p-3.5">
+                <div className="flex h-16 items-center justify-center rounded-lg border border-zinc-100 bg-zinc-50 p-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={p.logoUrl}
+                    alt={p.name}
+                    className="h-10 w-auto max-w-[140px] object-contain"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-semibold text-zinc-950">
+                      {p.name}
+                    </p>
+                    <p className="truncate text-[10px] text-zinc-500">
+                      {p.tagline || "Official Partner"}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      title={p.isActive ? "Hide from ticker" : "Show on ticker"}
+                      onClick={() => void handleToggle(p)}
+                    >
+                      {p.isActive ? (
+                        <Eye className="size-3.5 text-emerald-600" />
+                      ) : (
+                        <EyeOff className="size-3.5 text-zinc-400" />
+                      )}
+                    </Button>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      title="Delete partner logo"
+                      onClick={() => void handleDelete(p)}
+                    >
+                      <Trash2 className="size-3.5 text-rose-500" />
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import type {
   BranchOperatingSchedule,
   PlaylistSidebarConfig,
   QuickPostSlideConfig,
+  ScheduleRotationStep,
 } from "@/db/schema";
 import type { CustomTemplateRecord } from "@/components/studio/canvas-editor";
 import type { PasswordPolicyConfig, RolePermission } from "@/lib/permissions";
@@ -18,6 +19,8 @@ export type NavTab =
   | "departments"
   | "media"
   | "playlists"
+  | "promotions"
+  | "recognitions"
   | "schedules"
   | "broadcasts"
   | "feeds"
@@ -160,6 +163,7 @@ export interface ScheduleItem {
   daysOfWeek?: number[];
   daypartStart: string;
   daypartEnd: string;
+  rotationSequence?: ScheduleRotationStep[] | null;
   isActive: boolean;
 }
 
@@ -202,9 +206,95 @@ export interface SidebarProfileItem {
   qrTitle: string | null;
   promoLabel: string | null;
   qrTargetUrl: string | null;
+  qrTrackingMode?: "direct" | "tracked" | string;
+  qrShowLogo?: boolean;
   slideIntervalSeconds: number;
   productIds: string[];
   isDefault: boolean;
+}
+
+export interface AudioTrackItem {
+  id: string;
+  title: string;
+  artist: string;
+  moodTag: "showroom_lounge" | "upbeat_promo" | "corporate_ambient" | "celebration" | string;
+  publicUrl: string;
+  storagePath: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  durationSeconds: number;
+  volumePercent: number;
+  isActive: boolean;
+  createdAt?: string;
+}
+
+export interface PromotionItem {
+  id: string;
+  title: string;
+  description: string;
+  agencyName: string;
+  campaignCode: string | null;
+  mediaType: "image" | "video" | "pdf";
+  publicUrl: string;
+  storagePath: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  durationSeconds: number;
+  audioTrackId: string | null;
+  targetType:
+    | "screen"
+    | "screen_group"
+    | "branch"
+    | "country"
+    | "screen_role"
+    | "global";
+  targetId: string | null;
+  targetScreenIds?: string[] | null;
+  priority: number;
+  startDate: string | null;
+  endDate: string | null;
+  isActive: boolean;
+  createdAt?: string;
+}
+
+export interface EmployeeRecognitionItem {
+  id: string;
+  employeeName: string;
+  locationName: string;
+  branchId: string | null;
+  departmentName: string;
+  awardPeriodType: "month" | "quarter" | "year" | "special";
+  awardPeriodLabel: string;
+  citation: string;
+  avatarStyle: "illustrated" | "geometric" | "crown_badge";
+  avatarSeed: string;
+  accentColor: string;
+  audioTrackId: string | null;
+  targetType:
+    | "screen"
+    | "screen_group"
+    | "branch"
+    | "country"
+    | "screen_role"
+    | "global";
+  targetId: string | null;
+  targetScreenIds?: string[] | null;
+  injectEveryNSlides: number;
+  durationSeconds: number;
+  startDate: string | null;
+  endDate: string | null;
+  isActive: boolean;
+  createdAt?: string;
+}
+
+export interface PartnerLogoItem {
+  id: string;
+  name: string;
+  logoUrl: string;
+  storagePath?: string | null;
+  tagline: string | null;
+  sortOrder: number;
+  isActive: boolean;
 }
 
 export interface StudioBackgroundItem {
@@ -222,6 +312,10 @@ export interface PlaylistRecord {
   departmentId: string;
   layoutId?: string | null;
   sidebarProfileId?: string | null;
+  audioTrackId?: string | null;
+  promoInjectEveryN?: number;
+  showPartnerLogos?: boolean;
+  partnerTickerMode?: "pinned_right" | "inline_scroll" | "hidden" | string;
   tickerText?: string | null;
   sidebarConfig?: PlaylistSidebarConfig | null;
   isActive: boolean;
@@ -400,6 +494,10 @@ export interface OverviewPayload {
   showcaseProducts?: ShowcaseProductItem[];
   sidebarProfiles?: SidebarProfileItem[];
   studioBackgrounds?: StudioBackgroundItem[];
+  audioTracks?: AudioTrackItem[];
+  promotions?: PromotionItem[];
+  employeeRecognitions?: EmployeeRecognitionItem[];
+  partnerLogos?: PartnerLogoItem[];
   layouts: LayoutRecord[];
   playlists: PlaylistRecord[];
   schedules: ScheduleItem[];

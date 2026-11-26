@@ -25,12 +25,14 @@ import {
   ListVideo,
   LogIn,
   LogOut,
+  Megaphone,
   Radio,
   RefreshCw,
   Settings2,
   Shield,
   Sparkles,
   Store,
+  Trophy,
   Tv,
   Webhook,
 } from "lucide-react";
@@ -61,6 +63,8 @@ import { ShowroomsTab } from "./tabs/showrooms-tab";
 import { DepartmentsTab } from "./tabs/departments-tab";
 import { MediaTab } from "./tabs/media-tab";
 import { PlaylistsTab } from "./tabs/playlists-tab";
+import { PromotionsTab } from "./tabs/promotions-tab";
+import { RecognitionsTab } from "./tabs/recognitions-tab";
 import { SchedulesTab } from "./tabs/schedules-tab";
 import { BroadcastsTab } from "./tabs/broadcasts-tab";
 import { TemplatesTab } from "./tabs/templates-tab";
@@ -105,7 +109,15 @@ const TAB_META: Record<NavTab, { title: string; subtitle: string }> = {
   },
   playlists: {
     title: "Playlists & Layouts",
-    subtitle: "Drag-and-drop slide sequencing, multi-zone layouts, and running taglines.",
+    subtitle: "Drag-and-drop slide sequencing, multi-zone layouts, partner logos, and running taglines.",
+  },
+  promotions: {
+    title: "Promotions & Background Audio",
+    subtitle: "Upload agency-ready campaign designs with auto-expiry and Cloudflare R2 ambient music.",
+  },
+  recognitions: {
+    title: "Employee Spotlight",
+    subtitle: "Ingest Employee of the Month / Quarter / Year from Excel with auto-generated vector avatars.",
   },
   schedules: {
     title: "Daypart Schedules",
@@ -512,6 +524,26 @@ export function CrownCms() {
             icon: ListVideo,
             badge: data ? String(data.playlists.length) : undefined,
           },
+          {
+            id: "promotions",
+            label: "Promotions & Audio",
+            icon: Megaphone,
+            badge:
+              data && (data.promotions?.length ?? 0) > 0
+                ? String(data.promotions?.length)
+                : undefined,
+            badgeVariant: "warning",
+          },
+          {
+            id: "recognitions",
+            label: "Employee Spotlight",
+            icon: Trophy,
+            badge:
+              data && (data.employeeRecognitions?.length ?? 0) > 0
+                ? String(data.employeeRecognitions?.length)
+                : undefined,
+            badgeVariant: "purple",
+          },
           { id: "schedules", label: "Daypart Schedules", icon: CalendarClock },
           {
             id: "broadcasts",
@@ -877,6 +909,14 @@ export function CrownCms() {
                   }}
                   onRefresh={fetchOverview}
                 />
+              )}
+
+              {activeTab === "promotions" && (
+                <PromotionsTab data={data} onRefresh={fetchOverview} />
+              )}
+
+              {activeTab === "recognitions" && (
+                <RecognitionsTab data={data} onRefresh={fetchOverview} />
               )}
 
               {activeTab === "schedules" && (

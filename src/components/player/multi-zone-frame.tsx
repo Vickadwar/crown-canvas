@@ -15,11 +15,13 @@ import { QRCodeSVG } from "qrcode.react";
 import type { PlaylistSidebarConfig } from "@/db/schema";
 import {
   CROWN_DECORATIVE_QR_URL,
+  CROWN_OFFICIAL_LOGO_URL,
   CROWN_PRODUCT_SHOWCASE,
   type CrownProductItem,
 } from "@/lib/crown-products";
+import { resolveQrCodeValue } from "@/lib/qr-url";
 import type { EastAfricaWeather } from "@/lib/weather";
-import { TickerBar } from "./ticker-bar";
+import { TickerBar, type TickerPartnerLogo } from "./ticker-bar";
 
 export interface ActiveSidebarProfile {
   id: string;
@@ -32,6 +34,8 @@ export interface ActiveSidebarProfile {
   qrTitle?: string | null;
   promoLabel?: string | null;
   qrTargetUrl?: string | null;
+  qrTrackingMode?: "direct" | "tracked" | string;
+  qrShowLogo?: boolean;
   slideIntervalSeconds?: number;
 }
 
@@ -43,6 +47,8 @@ interface MultiZoneFrameProps {
   currencyCode: string;
   clockText: string;
   tickerMessages: string[];
+  partnerLogos?: TickerPartnerLogo[];
+  partnerTickerMode?: "pinned_right" | "inline_scroll" | "hidden" | string;
   orientation?: "landscape" | "portrait";
   sidebarSide?: "left" | "right";
   sidebarConfig?: PlaylistSidebarConfig | null;
@@ -108,6 +114,8 @@ export function MultiZoneFrame({
   currencyCode,
   clockText,
   tickerMessages,
+  partnerLogos = [],
+  partnerTickerMode = "pinned_right",
   orientation = "landscape",
   sidebarSide = "right",
   sidebarConfig,
@@ -207,28 +215,27 @@ export function MultiZoneFrame({
     sidebarConfig?.promoLabel?.trim() ||
     "Scan to browse Crown Decorative paints & shades.";
 
-  // Build ultra-short, showroom-scannable QR URL (`/q/sb?s=<screenId>`).
-  // Destination URL & branch are resolved server-side from Postgres so the QR stays
-  // compact (~55 chars instead of 280+ chars) and scans effortlessly from 2-3 meters away.
+  // Resolve QR value according to mode:
+  //  - "direct" (default): encodes real destination URL (e.g. crownpaints.co.ke) so smartphone
+  //    cameras immediately preview the official brand domain before tapping.
+  //  - "tracked": encodes compact `/q/sb?s=<screenId>` redirect (or custom domain) for scan analytics.
   const sidebarProfileId = sidebarProfile?.id;
+  const qrTrackingMode = sidebarProfile?.qrTrackingMode ?? "direct";
+  const showQrLogo = sidebarProfile?.qrShowLogo !== false;
+
   const qrValue = useMemo(() => {
-    if (typeof window === "undefined") return qrDestination;
-    if (!screenId) return qrDestination;
-    const isLocal =
-      window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1";
-    const configuredBase = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(
-      /\/+$/,
-      ""
-    );
-    const origin =
-      isLocal && configuredBase && !configuredBase.includes("localhost")
-        ? configuredBase
-        : window.location.origin;
-    const params = new URLSearchParams({ s: screenId });
-    if (sidebarProfileId) params.set("sp", sidebarProfileId);
-    return `${origin}/q/sb?${params.toString()}`;
-  }, [screenId, sidebarProfileId, qrDestination]);
+    const currentOrigin =
+      typeof window !== "undefined" ? window.location.origin : "";
+    return resolveQrCodeValue({
+      destinationUrl: qrDestination,
+      mode: qrTrackingMode,
+      kind: "sidebar",
+      screenId,
+      sidebarProfileId,
+      currentOrigin,
+      configuredAppUrl: process.env.NEXT_PUBLIC_APP_URL,
+    });
+  }, [qrDestination, qrTrackingMode, screenId, sidebarProfileId]);
 
   const qrDisplayHost = (() => {
     try {
@@ -325,11 +332,21 @@ export function MultiZoneFrame({
               <div className="shrink-0 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-2xs">
                 <QRCodeSVG
                   value={qrValue}
-                  size={74}
-                  level="M"
+                  size={80}
+                  level="H"
                   marginSize={2}
                   bgColor="#ffffff"
                   fgColor="#000000"
+                  imageSettings={
+                    showQrLogo
+                      ? {
+                          src: CROWN_OFFICIAL_LOGO_URL,
+                          height: 18,
+                          width: 18,
+                          excavate: true,
+                        }
+                      : undefined
+                  }
                 />
               </div>
               <div className="min-w-0">
@@ -346,7 +363,12 @@ export function MultiZoneFrame({
           )}
         </section>
 
-        <TickerBar messages={tickerContent} compact />
+        <TickerBar
+          messages={tickerContent}
+          compact
+          partnerLogos={partnerLogos}
+          partnerMode={partnerTickerMode}
+        />
       </div>
     );
   }
@@ -504,11 +526,21 @@ export function MultiZoneFrame({
               <div className="shrink-0 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-2xs">
                 <QRCodeSVG
                   value={qrValue}
-                  size={96}
-                  level="M"
+                  size={104}
+                  level="H"
                   marginSize={2}
                   bgColor="#ffffff"
                   fgColor="#000000"
+                  imageSettings={
+                    showQrLogo
+                      ? {
+                          src: CROWN_OFFICIAL_LOGO_URL,
+                          height: 24,
+                          width: 24,
+                          excavate: true,
+                        }
+                      : undefined
+                  }
                 />
               </div>
               <div className="min-w-0">
@@ -534,7 +566,11 @@ export function MultiZoneFrame({
       </div>
 
       {/* Bottom Ticker Zone */}
-      <TickerBar messages={tickerContent} />
+      <TickerBar
+        messages={tickerContent}
+        partnerLogos={partnerLogos}
+        partnerMode={partnerTickerMode}
+      />
     </div>
   );
 }

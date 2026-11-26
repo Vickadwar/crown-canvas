@@ -42,6 +42,13 @@ export const overrideKindEnum = pgEnum("override_kind", [
   "playlist",
 ]);
 
+export interface ScheduleRotationStep {
+  kind: "playlist" | "promotions" | "recognitions";
+  playlistId?: string | null;
+  label?: string;
+  durationMinutes: number; // How many minutes this step airs before rotating to the next step
+}
+
 export const schedules = pgTable("schedules", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: varchar("name", { length: 150 }).notNull(),
@@ -57,6 +64,7 @@ export const schedules = pgTable("schedules", {
   daysOfWeek: jsonb("days_of_week").$type<number[]>().default([0, 1, 2, 3, 4, 5, 6]).notNull(),
   daypartStart: varchar("daypart_start", { length: 5 }).default("00:00").notNull(),
   daypartEnd: varchar("daypart_end", { length: 5 }).default("23:59").notNull(),
+  rotationSequence: jsonb("rotation_sequence").$type<ScheduleRotationStep[] | null>(),
   isActive: boolean("is_active").default(true).notNull(),
   createdBy: uuid("created_by").references(() => users.id, {
     onDelete: "set null",

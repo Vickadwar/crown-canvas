@@ -4,6 +4,8 @@
  * local timezone (`Africa/Nairobi`, `Africa/Dar_es_Salaam`, `Africa/Kampala`).
  */
 
+import type { ScheduleRotationStep } from "@/db/schema/schedules";
+
 export interface SchedulableScreenContext {
   screenId: string;
   branchId: string;
@@ -32,7 +34,245 @@ export interface ScheduleRecord {
   daysOfWeek: number[];
   daypartStart: string;
   daypartEnd: string;
+  rotationSequence?: ScheduleRotationStep[] | null;
   isActive: boolean;
+}
+
+export interface TargetableCampaign {
+  targetType:
+    | "screen"
+    | "screen_group"
+    | "branch"
+    | "country"
+    | "screen_role"
+    | "global";
+  targetId: string | null;
+  targetScreenIds?: string[] | null;
+  startDate?: Date | string | null;
+  endDate?: Date | string | null;
+  isActive: boolean;
+}
+
+/**
+ * Shared screen & date-window matcher for Promotions, Employee Recognitions, and Schedules.
+ */
+export function matchesScreenTarget(
+  item: TargetableCampaign,
+  ctx: SchedulableScreenContext,
+  now: Date = new Date()
+): boolean {
+  if (!item.isActive) return false;
+  if (item.startDate) {
+    const start =
+      typeof item.startDate === "string" ? new Date(item.startDate) : item.startDate;
+    if (Number.isFinite(start.getTime()) && now < start) return false;
+  }
+  if (item.endDate) {
+    const end =
+      typeof item.endDate === "string" ? new Date(item.endDate) : item.endDate;
+    if (Number.isFinite(end.getTime()) && now > end) return false;
+  }
+
+  if (Array.isArray(item.targetScreenIds) && item.targetScreenIds.length > 0) {
+    return item.targetScreenIds.includes(ctx.screenId);
+  }
+
+  switch (item.targetType) {
+    case "global":
+      return true;
+    case "country":
+      return Boolean(ctx.countryId && item.targetId === ctx.countryId);
+    case "branch":
+      return item.targetId === ctx.branchId;
+    case "screen_group":
+      return Boolean(ctx.groupId && item.targetId === ctx.groupId);
+    case "screen_role":
+      return item.targetId ? item.targetId === ctx.screenRole : true;
+    case "screen":
+      return item.targetId === ctx.screenId;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Deterministically picks which step in a chained `rotationSequence` (e.g.
+ * Playlist A 15 min -> Promotions 5 min -> Playlist B 15 min -> loop) should air
+ * at `now`, keeping all screens in the same showroom synchronized without flickering.
+ */
+export function resolveActiveRotationStep(
+  sequence: ScheduleRotationStep[] | null | undefined,
+  now: Date = new Date(),
+  timezone: string = "Africa/Nairobi"
+): { step: ScheduleRotationStep; stepIndex: number; remainingSeconds: number } | null {
+  if (!sequence || sequence.length === 0) return null;
+  const validSteps = sequence.filter((s) => (s.durationMinutes ?? 0) > 0);
+  if (validSteps.length === 0) return null;
+
+  const totalMinutes = validSteps.reduce(
+    (sum, s) => sum + Math.max(1, Math.round(s.durationMinutes)),
+    0
+  );
+  const { hhmm } = getLocalClockAndDay(now, timezone);
+  const [hStr, mStr] = hhmm.split(":");
+  const minuteOfDay = (Number(hStr) || 0) * 60 + (Number(mStr) || 0);
+  const secondOfMinute = now.getSeconds();
+  const cyclePosSec = ((minuteOfDay % totalMinutes) * 60) + secondOfMinute;
+
+  let cursorSec = 0;
+  for (let idx = 0; idx < validSteps.length; idx++) {
+    const step = validSteps[idx];
+    const stepLenSec = Math.max(1, Math.round(step.durationMinutes)) * 60;
+    if (cyclePosSec < cursorSec + stepLenSec) {
+      return {
+        step,
+        stepIndex: idx,
+        remainingSeconds: Math.max(5, cursorSec + stepLenSec - cyclePosSec),
+      };
+    }
+    cursorSec += stepLenSec;
+  }
+
+  return {
+    step: validSteps[0],
+    stepIndex: 0,
+    remainingSeconds: Math.max(60, Math.round(validSteps[0].durationMinutes) * 60),
+  };
+}
+
+/**
+ * Interleaves active targeted Promotions and/or Employee Recognition spotlights into a
+ * base playlist queue at configurable intervals (e.g., 1 promotion every 3 slides,
+ * 1 employee spotlight every 6 slides) while preserving smooth playback flow.
+ */
+export function interleavePlaybackItems<T>(params: {
+  baseItems: T[];
+  promotions?: T[];
+  promoEveryN?: number;
+  recognitions?: T[];
+  recognitionEveryN?: number;
+}): T[] {
+  const base = params.baseItems;
+  const promos = params.promotions ?? [];
+  const recs = params.recognitions ?? [];
+  const promoN = Math.max(0, Math.floor(params.promoEveryN ?? 0));
+  const recN = Math.max(0, Math.floor(params.recognitionEveryN ?? 0));
+
+  if (base.length === 0) {
+    if (promos.length > 0 || recs.length > 0) {
+      return [...promos, ...recs];
+    }
+    return [];
+  }
+
+  if ((promoN <= 0 || promos.length === 0) && (recN <= 0 || recs.length === 0)) {
+    return base;
+  }
+
+  const out: T[] = [];
+  let promoCursor = 0;
+  let recCursor = 0;
+
+  for (let i = 0; i < base.length; i++) {
+    out.push(base[i]);
+    const slideNumber = i + 1;
+
+    if (promoN > 0 && promos.length > 0 && slideNumber % promoN === 0) {
+      out.push(promos[promoCursor % promos.length]);
+      promoCursor += 1;
+    }
+
+    if (recN > 0 && recs.length > 0 && slideNumber % recN === 0) {
+      out.push(recs[recCursor % recs.length]);
+      recCursor += 1;
+    }
+  }
+
+  // Ensure at least one promo/recognition airs per loop if the playlist is shorter than N
+  if (promoN > 0 && promos.length > 0 && promoCursor === 0) {
+    out.push(promos[0]);
+  }
+  if (recN > 0 && recs.length > 0 && recCursor === 0) {
+    out.push(recs[0]);
+  }
+
+  return out;
+}
+
+export interface TimelineSlot {
+  hour: number;
+  label: string;
+  scheduleName: string | null;
+  playlistId: string | null;
+  hasRotation: boolean;
+}
+
+/**
+ * Generates a 24-hour broadcast schedule preview (00:00–23:00) for a given screen & weekday.
+ */
+export function buildDailyBroadcastTimeline(
+  allSchedules: ScheduleRecord[],
+  ctx: SchedulableScreenContext,
+  dayOfWeek: number
+): TimelineSlot[] {
+  // Build a reference date matching `dayOfWeek` (2026-11-22 is a Sunday -> idx 0)
+  const baseSunday = Date.UTC(2026, 10, 22, 0, 0, 0);
+  const slots: TimelineSlot[] = [];
+
+  for (let hour = 0; hour < 24; hour++) {
+    const hhmm = `${String(hour).padStart(2, "0")}:30`;
+    const matching = allSchedules.filter((sch) => {
+      if (!sch.isActive) return false;
+      if (!sch.daysOfWeek.includes(dayOfWeek)) return false;
+      if (!isWithinDaypart(hhmm, sch.daypartStart, sch.daypartEnd)) return false;
+      switch (sch.targetType) {
+        case "global":
+          return true;
+        case "country":
+          return Boolean(ctx.countryId && sch.targetId === ctx.countryId);
+        case "branch":
+          return sch.targetId === ctx.branchId;
+        case "screen_group":
+          return Boolean(ctx.groupId && sch.targetId === ctx.groupId);
+        case "screen_role":
+          return Boolean(
+            sch.targetScreenRole && sch.targetScreenRole === ctx.screenRole
+          );
+        case "screen":
+          return sch.targetId === ctx.screenId;
+        default:
+          return false;
+      }
+    });
+
+    const specificityRank: Record<ScheduleRecord["targetType"], number> = {
+      screen: 6,
+      screen_group: 5,
+      branch: 4,
+      screen_role: 3,
+      country: 2,
+      global: 1,
+    };
+
+    matching.sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return specificityRank[b.targetType] - specificityRank[a.targetType];
+    });
+
+    const winner = matching[0] ?? null;
+    void baseSunday;
+    slots.push({
+      hour,
+      label: `${String(hour).padStart(2, "0")}:00`,
+      scheduleName: winner?.name ?? null,
+      playlistId: winner?.playlistId ?? null,
+      hasRotation: Boolean(
+        winner?.rotationSequence && winner.rotationSequence.length > 1
+      ),
+    });
+  }
+
+  return slots;
 }
 
 function getLocalClockAndDay(now: Date, timezone: string): {

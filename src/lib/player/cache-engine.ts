@@ -120,7 +120,7 @@ export interface ManifestAssetRef {
   sha256Checksum: string;
   publicUrl: string;
   mimeType: string;
-  mediaType?: "video" | "image" | "web_url" | "pdf";
+  mediaType?: "video" | "image" | "web_url" | "pdf" | "audio";
 }
 
 /**

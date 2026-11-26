@@ -4,6 +4,13 @@ import { db, isDatabaseConfigured, schedules } from "@/db";
 import { broadcastFleetSignal } from "@/lib/realtime";
 import { requireAdminAccess } from "@/lib/auth-guard";
 
+const rotationStepSchema = z.object({
+  kind: z.enum(["playlist", "promotions", "recognitions"]),
+  playlistId: z.string().uuid().nullable().optional(),
+  label: z.string().max(120).optional(),
+  durationMinutes: z.number().int().min(1).max(720),
+});
+
 const patchSchema = z.object({
   name: z.string().min(2).max(160).optional(),
   playlistId: z.string().uuid().optional(),
@@ -16,6 +23,7 @@ const patchSchema = z.object({
     .nullable()
     .optional(),
   daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).optional(),
+  rotationSequence: z.array(rotationStepSchema).max(20).nullable().optional(),
   isActive: z.boolean().optional(),
   priority: z.number().int().min(1).max(1000).optional(),
   daypartStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),

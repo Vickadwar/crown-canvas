@@ -359,3 +359,120 @@ export async function normalizeProductImageForSidebar(file: File): Promise<{
     return optimizeImageForSignage(file);
   }
 }
+
+/**
+ * Normalizes any uploaded Partner Logo (wide horizontal like Fevicol, square, or vertical)
+ * for the bottom ticker bar:
+ * - Auto-trims excess transparent OR solid near-white outer padding so every partner logo
+ *   renders at the exact same optical height in the ticker bar.
+ * - Preserves 100% original aspect ratio (zero stretching, zero distortion) at crisp @2x
+ *   height (160px tall, capped at 520px wide) as lossless-grade WebP.
+ */
+export async function normalizePartnerLogoForTicker(file: File): Promise<{
+  file: File;
+  savedBytes: number;
+  width?: number;
+  height?: number;
+}> {
+  if (
+    typeof document === "undefined" ||
+    !file.type.startsWith("image/") ||
+    file.type === "image/svg+xml" ||
+    file.type === "image/gif"
+  ) {
+    return { file, savedBytes: 0 };
+  }
+
+  try {
+    const bitmap = await createImageBitmap(file);
+    const srcW = bitmap.width;
+    const srcH = bitmap.height;
+
+    const probeScale = Math.min(1, 900 / Math.max(srcW, srcH));
+    const probeW = Math.max(1, Math.round(srcW * probeScale));
+    const probeH = Math.max(1, Math.round(srcH * probeScale));
+    const probeCanvas = document.createElement("canvas");
+    probeCanvas.width = probeW;
+    probeCanvas.height = probeH;
+    const probeCtx = probeCanvas.getContext("2d");
+
+    let cropX = 0;
+    let cropY = 0;
+    let cropW = srcW;
+    let cropH = srcH;
+
+    if (probeCtx) {
+      probeCtx.drawImage(bitmap, 0, 0, probeW, probeH);
+      const pixels = probeCtx.getImageData(0, 0, probeW, probeH).data;
+      let minX = probeW;
+      let minY = probeH;
+      let maxX = -1;
+      let maxY = -1;
+
+      for (let y = 0; y < probeH; y++) {
+        for (let x = 0; x < probeW; x++) {
+          const idx = (y * probeW + x) * 4;
+          const r = pixels[idx];
+          const g = pixels[idx + 1];
+          const b = pixels[idx + 2];
+          const a = pixels[idx + 3];
+          const isEmpty = a < 18 || (r > 248 && g > 248 && b > 248);
+          if (!isEmpty) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      if (maxX > minX && maxY > minY) {
+        cropX = Math.max(0, Math.floor(minX / probeScale));
+        cropY = Math.max(0, Math.floor(minY / probeScale));
+        cropW = Math.min(srcW - cropX, Math.ceil((maxX - minX + 1) / probeScale));
+        cropH = Math.min(srcH - cropY, Math.ceil((maxY - minY + 1) / probeScale));
+      }
+    }
+
+    const targetMaxH = 160;
+    const targetMaxW = 520;
+    const scale = Math.min(targetMaxH / cropH, targetMaxW / cropW, 2);
+    const outW = Math.max(24, Math.round(cropW * scale));
+    const outH = Math.max(24, Math.round(cropH * scale));
+    const pad = 6;
+
+    const outCanvas = document.createElement("canvas");
+    outCanvas.width = outW + pad * 2;
+    outCanvas.height = outH + pad * 2;
+    const outCtx = outCanvas.getContext("2d");
+    if (!outCtx) {
+      bitmap.close();
+      return optimizeImageForSignage(file);
+    }
+
+    outCtx.imageSmoothingEnabled = true;
+    outCtx.imageSmoothingQuality = "high";
+    outCtx.drawImage(bitmap, cropX, cropY, cropW, cropH, pad, pad, outW, outH);
+    bitmap.close();
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      outCanvas.toBlob((b) => resolve(b), "image/webp", 0.94)
+    );
+    if (!blob) {
+      return optimizeImageForSignage(file);
+    }
+
+    const baseName = file.name.replace(/\.[^.]+$/, "");
+    const normalized = new File([blob], `${baseName}-logo.webp`, {
+      type: "image/webp",
+    });
+    return {
+      file: normalized,
+      savedBytes: Math.max(0, file.size - normalized.size),
+      width: outCanvas.width,
+      height: outCanvas.height,
+    };
+  } catch {
+    return optimizeImageForSignage(file);
+  }
+}

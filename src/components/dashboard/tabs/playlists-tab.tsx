@@ -58,6 +58,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { TaglineBuilder } from "@/components/dashboard/tagline-builder";
 import {
   BUILTIN_DEFAULT_SIDEBAR_ID,
+  PartnerLogosPanel,
   ShowcaseProductsPanel,
   SidebarProfilesPanel,
 } from "@/components/dashboard/sidebar-designer-panel";
@@ -194,9 +195,9 @@ export function PlaylistsTab({
   onRefresh,
 }: PlaylistsTabProps) {
   const confirm = useConfirm();
-  const [subTab, setSubTab] = useState<"playlists" | "sidebars" | "products">(
-    "playlists"
-  );
+  const [subTab, setSubTab] = useState<
+    "playlists" | "sidebars" | "products" | "partners"
+  >("playlists");
   const [editProfileId, setEditProfileId] = useState<string | null>(null);
   const [autoCreatingSidebar, setAutoCreatingSidebar] = useState(false);
   const [searchPl, setSearchPl] = useState("");
@@ -439,6 +440,11 @@ export function PlaylistsTab({
               label: `Showcase Products (${showcaseProductsCount})`,
               icon: Package,
             },
+            {
+              id: "partners" as const,
+              label: `Partner Logos (${(data.partnerLogos ?? []).length})`,
+              icon: Globe,
+            },
           ].map((tab) => {
             const Icon = tab.icon;
             const active = subTab === tab.id;
@@ -474,6 +480,8 @@ export function PlaylistsTab({
         />
       ) : subTab === "products" ? (
         <ShowcaseProductsPanel data={data} onRefresh={onRefresh} />
+      ) : subTab === "partners" ? (
+        <PartnerLogosPanel data={data} onRefresh={onRefresh} />
       ) : (
     <div className="grid gap-5 lg:grid-cols-12">
       {/* LEFT RAIL: Playlists Directory */}
@@ -746,6 +754,85 @@ export function PlaylistsTab({
                     <CheckCircle2 className="size-3.5" />
                     Push to TVs
                   </Button>
+                </div>
+              </div>
+
+              {/* Ambient Music, Targeted Promotion Interleaving & Partner Ticker Strip */}
+              <div className="grid gap-2.5 rounded-xl border border-zinc-200/80 bg-zinc-50/70 p-3 md:grid-cols-3">
+                <div className="space-y-1">
+                  <Label className="text-[11px] text-zinc-600">
+                    Background Music (Silent Slides)
+                  </Label>
+                  <ModernSelect
+                    size="xs"
+                    value={activePlaylist.audioTrackId ?? ""}
+                    onValueChange={(v) =>
+                      void handlePatchPlaylist(
+                        activePlaylist.id,
+                        { audioTrackId: v || null },
+                        "Updated playlist background music & pushed to TVs"
+                      )
+                    }
+                    options={[
+                      { value: "", label: "No Ambient Music (Silent)" },
+                      ...(data.audioTracks ?? []).map((a) => ({
+                        value: a.id,
+                        label: `♪ ${a.title} (${a.volumePercent}%)`,
+                      })),
+                    ]}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px] text-zinc-600">
+                    Auto-Inject Active Promotions
+                  </Label>
+                  <ModernSelect
+                    size="xs"
+                    value={String(activePlaylist.promoInjectEveryN ?? 0)}
+                    onValueChange={(v) =>
+                      void handlePatchPlaylist(
+                        activePlaylist.id,
+                        { promoInjectEveryN: Number(v) || 0 },
+                        "Updated promotion ad-break cadence & pushed to TVs"
+                      )
+                    }
+                    options={[
+                      { value: "0", label: "Off (Playlist Only)" },
+                      { value: "2", label: "1 Promo every 2 slides" },
+                      { value: "3", label: "1 Promo every 3 slides" },
+                      { value: "4", label: "1 Promo every 4 slides" },
+                      { value: "5", label: "1 Promo every 5 slides" },
+                      { value: "6", label: "1 Promo every 6 slides" },
+                    ]}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px] text-zinc-600">
+                    Bottom Ticker Partner Logos
+                  </Label>
+                  <ModernSelect
+                    size="xs"
+                    value={
+                      activePlaylist.showPartnerLogos === false
+                        ? "hidden"
+                        : (activePlaylist.partnerTickerMode || "pinned_right")
+                    }
+                    onValueChange={(v) =>
+                      void handlePatchPlaylist(
+                        activePlaylist.id,
+                        {
+                          showPartnerLogos: v !== "hidden",
+                          partnerTickerMode: v,
+                        },
+                        "Updated partner logo ticker display & pushed to TVs"
+                      )
+                    }
+                    options={[
+                      { value: "pinned_right", label: "Pinned Right Rail (Recommended)" },
+                      { value: "inline_scroll", label: "Inline Scrolling in Tagline" },
+                      { value: "hidden", label: "Hide Partner Logos" },
+                    ]}
+                  />
                 </div>
               </div>
 

@@ -6,6 +6,13 @@ import { broadcastFleetSignal } from "@/lib/realtime";
 import { recordAuditLog } from "@/lib/audit";
 import { requireAdminAccess } from "@/lib/auth-guard";
 
+const rotationStepSchema = z.object({
+  kind: z.enum(["playlist", "promotions", "recognitions"]),
+  playlistId: z.string().uuid().nullable().optional(),
+  label: z.string().max(120).optional(),
+  durationMinutes: z.number().int().min(1).max(720),
+});
+
 const createScheduleSchema = z.object({
   name: z.string().min(2).max(150),
   playlistId: z.string().uuid(),
@@ -26,6 +33,7 @@ const createScheduleSchema = z.object({
   daysOfWeek: z.array(z.number().int().min(0).max(6)).default([0, 1, 2, 3, 4, 5, 6]),
   daypartStart: z.string().regex(/^\d{2}:\d{2}$/).default("08:00"),
   daypartEnd: z.string().regex(/^\d{2}:\d{2}$/).default("17:30"),
+  rotationSequence: z.array(rotationStepSchema).max(20).nullable().optional(),
   startDate: z.string().datetime().nullable().optional(),
   endDate: z.string().datetime().nullable().optional(),
 });
@@ -75,6 +83,10 @@ export async function POST(request: Request) {
         daysOfWeek: parsed.data.daysOfWeek,
         daypartStart: parsed.data.daypartStart,
         daypartEnd: parsed.data.daypartEnd,
+        rotationSequence:
+          parsed.data.rotationSequence && parsed.data.rotationSequence.length > 0
+            ? parsed.data.rotationSequence
+            : null,
         startDate: parsed.data.startDate ? new Date(parsed.data.startDate) : null,
         endDate: parsed.data.endDate ? new Date(parsed.data.endDate) : null,
       })

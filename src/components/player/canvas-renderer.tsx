@@ -70,6 +70,7 @@ import { QRCodeSVG } from "qrcode.react";
 import type { StudioCanvasDoc, StudioCanvasElement } from "@/db/schema";
 import { getStudioFontFamily } from "@/lib/studio-assets";
 import { CROWN_OFFICIAL_LOGO_URL } from "@/lib/crown-products";
+import { resolveQrCodeValue } from "@/lib/qr-url";
 
 const ICON_COMPONENTS: Record<string, LucideIcon> = {
   Paintbrush,
@@ -380,23 +381,21 @@ export function CanvasRenderer({
     window.addEventListener("pointerup", onUp);
   }
 
-  function buildQrValue(rawUrl?: string, qrIndex = 0): string {
-    const target = rawUrl?.trim() || "https://www.crownpaints.co.ke";
-    if (!screenId || !quickPostId || typeof window === "undefined") return target;
-    const isLocal =
-      window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1";
-    const configuredBase = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(
-      /\/+$/,
-      ""
-    );
-    const origin =
-      isLocal && configuredBase && !configuredBase.includes("localhost")
-        ? configuredBase
-        : window.location.origin;
-    const params = new URLSearchParams({ p: quickPostId, s: screenId });
-    if (qrIndex > 0) params.set("i", String(qrIndex));
-    return `${origin}/q/sl?${params.toString()}`;
+  function buildQrValue(
+    rawUrl?: string,
+    qrIndex = 0,
+    trackingMode?: "direct" | "tracked"
+  ): string {
+    return resolveQrCodeValue({
+      destinationUrl: rawUrl?.trim() || "https://www.crownpaints.co.ke",
+      mode: trackingMode ?? "direct",
+      kind: "slide",
+      screenId,
+      quickPostId,
+      qrIndex,
+      currentOrigin: typeof window !== "undefined" ? window.location.origin : "",
+      configuredAppUrl: process.env.NEXT_PUBLIC_APP_URL,
+    });
   }
 
   function renderShapeBody(el: StudioCanvasElement) {
@@ -638,11 +637,11 @@ export function CanvasRenderer({
           el.chartSeries && el.chartSeries.length > 0
             ? el.chartSeries
             : [
-                { label: "Nairobi", value: 14.2, target: 13.0 },
-                { label: "Westlands", value: 11.8, target: 10.5 },
-                { label: "Mombasa", value: 8.6, target: 8.2 },
-                { label: "Dar", value: 9.4, target: 8.8 },
-              ];
+              { label: "Nairobi", value: 14.2, target: 13.0 },
+              { label: "Westlands", value: 11.8, target: 10.5 },
+              { label: "Mombasa", value: 8.6, target: 8.2 },
+              { label: "Dar", value: 9.4, target: 8.8 },
+            ];
         const hasTarget = series.some((s) => s.target !== undefined);
         const ink = el.color || "#ffffff";
         return (
@@ -732,10 +731,10 @@ export function CanvasRenderer({
           el.donutSlices && el.donutSlices.length > 0
             ? el.donutSlices
             : [
-                { name: "Decorative", value: 58, color: "#2563eb" },
-                { name: "Automotive", value: 24, color: "#f59e0b" },
-                { name: "Industrial", value: 18, color: "#10b981" },
-              ];
+              { name: "Decorative", value: 58, color: "#2563eb" },
+              { name: "Automotive", value: 24, color: "#f59e0b" },
+              { name: "Industrial", value: 18, color: "#10b981" },
+            ];
         const ink = el.color || "#ffffff";
         return (
           <div
@@ -921,10 +920,10 @@ export function CanvasRenderer({
           el.tableRows && el.tableRows.length > 0
             ? el.tableRows
             : [
-                ["Pack Sizes", "Retail & Trade", "1L / 4L / 20L"],
-                ["Coverage Rate", "2-Coat System", "14–16 m² / L"],
-                ["Dry Time", "@ 25°C Ambient", "2 Hours"],
-              ];
+              ["Pack Sizes", "Retail & Trade", "1L / 4L / 20L"],
+              ["Coverage Rate", "2-Coat System", "14–16 m² / L"],
+              ["Dry Time", "@ 25°C Ambient", "2 Hours"],
+            ];
         const ink = el.color || "#0f172a";
         return (
           <div
@@ -962,13 +961,12 @@ export function CanvasRenderer({
                   {row.map((cell, cIdx) => (
                     <span
                       key={cIdx}
-                      className={`truncate ${
-                        cIdx === 0
+                      className={`truncate ${cIdx === 0
                           ? "font-bold"
                           : cIdx === row.length - 1
                             ? "font-mono font-semibold"
                             : "opacity-85"
-                      }`}
+                        }`}
                     >
                       {cell}
                     </span>
@@ -1194,12 +1192,22 @@ export function CanvasRenderer({
           >
             <div className="rounded-[18px] bg-white p-4 shadow-sm">
               <QRCodeSVG
-                value={buildQrValue(el.qrUrl, qrIndex)}
+                value={buildQrValue(el.qrUrl, qrIndex, el.qrTrackingMode)}
                 size={200}
-                level="M"
+                level="H"
                 marginSize={2}
                 bgColor="#ffffff"
                 fgColor="#000000"
+                imageSettings={
+                  el.qrShowLogo !== false
+                    ? {
+                      src: CROWN_OFFICIAL_LOGO_URL,
+                      height: 44,
+                      width: 44,
+                      excavate: true,
+                    }
+                    : undefined
+                }
               />
             </div>
             <p
@@ -1313,15 +1321,14 @@ export function CanvasRenderer({
               <div
                 key={el.id}
                 onPointerDown={(e) => startMoveDrag(e, el)}
-                className={`absolute ${
-                  interactive
+                className={`absolute ${interactive
                     ? el.locked
                       ? "cursor-not-allowed"
                       : editingTextId === el.id
                         ? "cursor-text"
                         : "cursor-move"
                     : ""
-                }`}
+                  }`}
                 style={{
                   left: `${el.x}%`,
                   top: `${el.y}%`,

@@ -5,7 +5,7 @@
  * telemetry, audit logs, and RBAC users) with automatic 57P01 pool-reconnect retry.
  */
 
-import { desc, eq, sql } from "drizzle-orm";
+import { asc, desc, eq, sql } from "drizzle-orm";
 import { connection } from "next/server";
 import {
   db,
@@ -33,6 +33,10 @@ import {
   auditLogs,
   users,
   userScopes,
+  audioTracks,
+  promotions,
+  employeeRecognitions,
+  partnerLogos,
 } from "@/db";
 import {
   canAutoApproveContent,
@@ -196,6 +200,10 @@ export async function GET() {
       sidebarProfileRows,
       studioBackgroundRows,
       appLicense,
+      audioTrackRows,
+      promotionRows,
+      recognitionRows,
+      partnerLogoRows,
     ] = await withDbRetry(async () => {
       // Compact 3-wave parallel query plan (cuts CMS refresh latency by ~60% on Supavisor)
       const w1 = await Promise.all([
@@ -295,6 +303,26 @@ export async function GET() {
           .orderBy(desc(studioBackgrounds.createdAt))
           .catch(() => []),
         getSharedAppLicense(isSuper),
+        db
+          .select()
+          .from(audioTracks)
+          .orderBy(desc(audioTracks.createdAt))
+          .catch(() => []),
+        db
+          .select()
+          .from(promotions)
+          .orderBy(desc(promotions.priority), desc(promotions.createdAt))
+          .catch(() => []),
+        db
+          .select()
+          .from(employeeRecognitions)
+          .orderBy(desc(employeeRecognitions.createdAt))
+          .catch(() => []),
+        db
+          .select()
+          .from(partnerLogos)
+          .orderBy(asc(partnerLogos.sortOrder), asc(partnerLogos.createdAt))
+          .catch(() => []),
       ]);
 
       return [...w1, ...w2, ...w3] as const;
@@ -457,6 +485,10 @@ export async function GET() {
       showcaseProducts: showcaseProductRows,
       sidebarProfiles: sidebarProfileRows,
       studioBackgrounds: studioBackgroundRows,
+      audioTracks: audioTrackRows,
+      promotions: promotionRows,
+      employeeRecognitions: recognitionRows,
+      partnerLogos: partnerLogoRows,
       roles: roleRows.map((r) => ({
         ...r,
         memberCount: new Set(

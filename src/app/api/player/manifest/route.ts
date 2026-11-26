@@ -24,9 +24,18 @@ import {
   emergencyOverrides,
   showcaseProducts,
   sidebarProfiles,
+  audioTracks,
+  promotions,
+  employeeRecognitions,
+  partnerLogos,
 } from "@/db";
 import { hashDeviceToken } from "@/lib/security";
-import { resolveActiveSchedule } from "@/lib/schedule-resolver";
+import {
+  interleavePlaybackItems,
+  matchesScreenTarget,
+  resolveActiveRotationStep,
+  resolveActiveSchedule,
+} from "@/lib/schedule-resolver";
 import { signQrRedirect } from "@/lib/url-security";
 import {
   CROWN_DECORATIVE_QR_URL,
@@ -117,18 +126,25 @@ export async function GET(request: Request) {
       return false;
     });
 
-    const matchedSchedule = resolveActiveSchedule(
-      allSchedules,
-      {
-        screenId: screen.id,
-        branchId: screen.branchId,
-        countryId: country?.id ?? null,
-        groupId: screen.groupId,
-        screenRole: screen.screenRole,
-        timezone: country?.timezone ?? "Africa/Nairobi",
-      },
-      now
-    );
+    const screenCtx = {
+      screenId: screen.id,
+      branchId: screen.branchId,
+      countryId: country?.id ?? null,
+      groupId: screen.groupId,
+      screenRole: screen.screenRole,
+      timezone: country?.timezone ?? "Africa/Nairobi",
+    };
+
+    const matchedSchedule = resolveActiveSchedule(allSchedules, screenCtx, now);
+
+    // Resolve chained Playlist / Promotions / Recognitions rotation sequence if configured
+    const activeRotation = matchedSchedule
+      ? resolveActiveRotationStep(
+          matchedSchedule.rotationSequence,
+          now,
+          screenCtx.timezone
+        )
+      : null;
 
     const emergencyPlaylistId =
       matchingOverride?.overrideKind === "playlist" &&
@@ -136,8 +152,14 @@ export async function GET(request: Request) {
         ? matchingOverride.playlistId
         : null;
 
+    const rotationPlaylistId =
+      activeRotation?.step.kind === "playlist" && activeRotation.step.playlistId
+        ? activeRotation.step.playlistId
+        : null;
+
     const targetPlaylistId =
       emergencyPlaylistId ??
+      rotationPlaylistId ??
       matchedSchedule?.playlistId ??
       screen.activePlaylistId;
 
@@ -301,8 +323,16 @@ export async function GET(request: Request) {
               "If you like it... Crown it!",
             ];
 
-    // Resolve Per-Playlist Sidebar Profile + Curated Showcase Products
-    const [allSidebarProfiles, allShowcaseProducts] = await Promise.all([
+    // Resolve Per-Playlist Sidebar Profile, Showcase Products, Audio Tracks, Active Promotions,
+    // Employee Recognitions & Official Partner Logos in parallel (additive-safe with `.catch(() => [])`)
+    const [
+      allSidebarProfiles,
+      allShowcaseProducts,
+      allAudioTracks,
+      allPromotions,
+      allRecognitions,
+      allPartnerLogos,
+    ] = await Promise.all([
       db
         .select()
         .from(sidebarProfiles)
@@ -314,7 +344,166 @@ export async function GET(request: Request) {
         .where(eq(showcaseProducts.isActive, true))
         .orderBy(asc(showcaseProducts.sortOrder), asc(showcaseProducts.createdAt))
         .catch(() => []),
+      db
+        .select()
+        .from(audioTracks)
+        .where(eq(audioTracks.isActive, true))
+        .catch(() => []),
+      db
+        .select()
+        .from(promotions)
+        .where(eq(promotions.isActive, true))
+        .orderBy(desc(promotions.priority), desc(promotions.createdAt))
+        .catch(() => []),
+      db
+        .select()
+        .from(employeeRecognitions)
+        .where(eq(employeeRecognitions.isActive, true))
+        .orderBy(desc(employeeRecognitions.createdAt))
+        .catch(() => []),
+      db
+        .select()
+        .from(partnerLogos)
+        .where(eq(partnerLogos.isActive, true))
+        .orderBy(asc(partnerLogos.sortOrder), asc(partnerLogos.createdAt))
+        .catch(() => []),
     ]);
+
+    const audioById = new Map(allAudioTracks.map((a) => [a.id, a]));
+    const playlistAudio = targetPlaylist?.audioTrackId
+      ? audioById.get(targetPlaylist.audioTrackId) ?? null
+      : null;
+
+    // Filter active, in-date Promotions & Employee Recognitions matching this screen
+    const matchedPromotions = allPromotions.filter((p) =>
+      matchesScreenTarget(
+        {
+          targetType: p.targetType,
+          targetId: p.targetId,
+          targetScreenIds: p.targetScreenIds,
+          startDate: p.startDate,
+          endDate: p.endDate,
+          isActive: p.isActive,
+        },
+        screenCtx,
+        now
+      )
+    );
+
+    const matchedRecognitions = allRecognitions.filter((r) =>
+      matchesScreenTarget(
+        {
+          targetType: r.targetType,
+          targetId: r.targetId,
+          targetScreenIds: r.targetScreenIds,
+          startDate: r.startDate,
+          endDate: r.endDate,
+          isActive: r.isActive,
+        },
+        screenCtx,
+        now
+      )
+    );
+
+    const promoPlaybackItems = matchedPromotions.map((p) => {
+      const track = p.audioTrackId ? audioById.get(p.audioTrackId) : null;
+      return {
+        id: `promo-${p.id}`,
+        kind: "media_asset" as const,
+        assetId: p.id,
+        isPromotion: true,
+        promotionId: p.id,
+        agencyName: p.agencyName,
+        title: p.title,
+        mediaType: p.mediaType,
+        publicUrl: p.publicUrl,
+        mimeType: p.mimeType,
+        sha256Checksum: p.sha256Checksum || p.id,
+        durationSeconds: Math.max(5, p.durationSeconds || 15),
+        departmentCode: "PROMOTIONS",
+        departmentName: p.agencyName || "Promotion",
+        audioTrackUrl: track?.publicUrl ?? null,
+        audioVolumePercent: track?.volumePercent ?? null,
+      };
+    });
+
+    const recognitionPlaybackItems = matchedRecognitions.map((r) => {
+      const track = r.audioTrackId ? audioById.get(r.audioTrackId) : null;
+      return {
+        id: `rec-${r.id}`,
+        kind: "employee_recognition" as const,
+        recognitionId: r.id,
+        title: `${r.employeeName} — ${r.awardPeriodLabel}`,
+        employeeName: r.employeeName,
+        locationName: r.locationName,
+        departmentName: r.departmentName,
+        awardPeriodType: r.awardPeriodType,
+        awardPeriodLabel: r.awardPeriodLabel,
+        citation: r.citation,
+        avatarStyle: r.avatarStyle,
+        avatarSeed: r.avatarSeed,
+        accentColor: r.accentColor,
+        durationSeconds: Math.max(5, r.durationSeconds || 14),
+        departmentCode: "HR",
+        audioTrackUrl: track?.publicUrl ?? null,
+        audioVolumePercent: track?.volumePercent ?? null,
+      };
+    });
+
+    // Attach optional per-slide audio to quick_post slides
+    const enrichedBaseItems = resolvedItems.map((it) => {
+      if (it.kind === "quick_post") {
+        const post = postById.get(it.quickPostId);
+        const track = post?.audioTrackId ? audioById.get(post.audioTrackId) : null;
+        return {
+          ...it,
+          audioTrackUrl: track?.publicUrl ?? null,
+          audioVolumePercent: track?.volumePercent ?? null,
+        };
+      }
+      return {
+        ...it,
+        audioTrackUrl: null as string | null,
+        audioVolumePercent: null as number | null,
+      };
+    });
+
+    // Determine final playback queue:
+    //  - If chained rotation step is `"promotions"` (and active promos exist), air active promotions
+    //  - If chained rotation step is `"recognitions"` (and active recognitions exist), air recognitions
+    //  - Otherwise interleave active promotions (per `playlist.promoInjectEveryN`) and employee spotlights
+    let finalPlaybackItems: Array<Record<string, unknown>>;
+    if (
+      !emergencyPlaylistId &&
+      activeRotation?.step.kind === "promotions" &&
+      promoPlaybackItems.length > 0
+    ) {
+      finalPlaybackItems = promoPlaybackItems;
+    } else if (
+      !emergencyPlaylistId &&
+      activeRotation?.step.kind === "recognitions" &&
+      recognitionPlaybackItems.length > 0
+    ) {
+      finalPlaybackItems = recognitionPlaybackItems;
+    } else {
+      const recEveryN =
+        matchedRecognitions.length > 0
+          ? Math.max(
+              1,
+              Math.min(
+                ...matchedRecognitions.map((r) => r.injectEveryNSlides || 6)
+              )
+            )
+          : 0;
+      const promoEveryN = targetPlaylist?.promoInjectEveryN ?? 0;
+      finalPlaybackItems = interleavePlaybackItems<Record<string, unknown>>({
+        baseItems: enrichedBaseItems,
+        promotions: promoPlaybackItems,
+        promoEveryN,
+        recognitions: recognitionPlaybackItems,
+        recognitionEveryN: recEveryN,
+      });
+    }
 
     const resolvedSidebarProfile =
       (targetPlaylist?.sidebarProfileId
@@ -426,8 +615,18 @@ export async function GET(request: Request) {
             tickerText: targetPlaylist.tickerText ?? null,
             sidebarConfig: targetPlaylist.sidebarConfig ?? null,
             sidebarProfileId: targetPlaylist.sidebarProfileId ?? null,
+            audioTrackUrl: playlistAudio?.publicUrl ?? null,
+            audioVolumePercent: playlistAudio?.volumePercent ?? 35,
+            showPartnerLogos: targetPlaylist.showPartnerLogos !== false,
+            partnerTickerMode: targetPlaylist.partnerTickerMode || "pinned_right",
           }
         : null,
+      partnerLogos: allPartnerLogos.map((p) => ({
+        id: p.id,
+        name: p.name,
+        logoUrl: p.logoUrl,
+        tagline: p.tagline,
+      })),
       sidebarProfile: resolvedSidebarProfile
         ? {
             id: resolvedSidebarProfile.id,
@@ -440,6 +639,8 @@ export async function GET(request: Request) {
             qrTitle: resolvedSidebarProfile.qrTitle,
             promoLabel: resolvedSidebarProfile.promoLabel,
             qrTargetUrl: resolvedSidebarProfile.qrTargetUrl,
+            qrTrackingMode: resolvedSidebarProfile.qrTrackingMode ?? "direct",
+            qrShowLogo: resolvedSidebarProfile.qrShowLogo !== false,
             slideIntervalSeconds: resolvedSidebarProfile.slideIntervalSeconds,
           }
         : null,
@@ -452,6 +653,8 @@ export async function GET(request: Request) {
             priority: matchedSchedule.priority,
             daypartStart: matchedSchedule.daypartStart,
             daypartEnd: matchedSchedule.daypartEnd,
+            activeRotationLabel: activeRotation?.step.label ?? null,
+            activeRotationKind: activeRotation?.step.kind ?? null,
           }
         : null,
       layout: activeLayout
@@ -481,7 +684,7 @@ export async function GET(request: Request) {
               : null,
           }
         : null,
-      items: resolvedItems,
+      items: finalPlaybackItems,
     };
 
     const etag = `"${crypto

@@ -123,6 +123,8 @@ export interface StudioCanvasElement {
   objectFit?: "cover" | "contain";
   qrUrl?: string;
   qrLabel?: string;
+  qrTrackingMode?: "direct" | "tracked";
+  qrShowLogo?: boolean;
   // Infographics & Charts (Recharts + Progress + Spec Table)
   chartTitle?: string;
   chartSeries?: Array<{ label: string; value: number; target?: number }>;
@@ -170,6 +172,8 @@ export interface QuickPostSlideConfig {
   price?: string;
   qrUrl?: string;
   qrLabel?: string;
+  qrTrackingMode?: "direct" | "tracked";
+  qrShowLogo?: boolean;
   accentColor?: string;
   backgroundTheme?:
     | "crown_navy"
@@ -249,6 +253,7 @@ export const quickPosts = pgTable("quick_posts", {
     onDelete: "set null",
   }),
   slideConfig: jsonb("slide_config").$type<QuickPostSlideConfig>().notNull(),
+  audioTrackId: uuid("audio_track_id"),
   durationSeconds: integer("duration_seconds").default(15).notNull(),
   createdBy: uuid("created_by").references(() => users.id, {
     onDelete: "set null",
@@ -299,6 +304,8 @@ export const sidebarProfiles = pgTable("sidebar_profiles", {
   qrTitle: varchar("qr_title", { length: 100 }).default("Explore Decorative Range"),
   promoLabel: varchar("promo_label", { length: 200 }),
   qrTargetUrl: text("qr_target_url"),
+  qrTrackingMode: varchar("qr_tracking_mode", { length: 16 }).default("direct").notNull(),
+  qrShowLogo: boolean("qr_show_logo").default(true).notNull(),
   slideIntervalSeconds: integer("slide_interval_seconds").default(6).notNull(),
   productIds: jsonb("product_ids").$type<string[]>().default([]).notNull(),
   isDefault: boolean("is_default").default(false).notNull(),
@@ -333,6 +340,12 @@ export const playlists = pgTable("playlists", {
   sidebarProfileId: uuid("sidebar_profile_id").references(() => sidebarProfiles.id, {
     onDelete: "set null",
   }),
+  audioTrackId: uuid("audio_track_id"),
+  promoInjectEveryN: integer("promo_inject_every_n").default(0).notNull(),
+  showPartnerLogos: boolean("show_partner_logos").default(true).notNull(),
+  partnerTickerMode: varchar("partner_ticker_mode", { length: 16 })
+    .default("pinned_right")
+    .notNull(),
   defaultDurationSeconds: integer("default_duration_seconds").default(15).notNull(),
   isActive: boolean("is_active").default(true).notNull(),
   version: integer("version").default(1).notNull(),

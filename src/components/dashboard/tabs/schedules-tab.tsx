@@ -14,11 +14,15 @@ import {
   PauseCircle,
   PlayCircle,
   Plus,
+  Repeat,
   Sparkles,
   Trash2,
+  Tv,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import type { ScheduleRotationStep } from "@/db/schema";
+import { buildDailyBroadcastTimeline } from "@/lib/schedule-resolver";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -94,7 +98,14 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
   const [daypartStart, setDaypartStart] = useState("08:00");
   const [daypartEnd, setDaypartEnd] = useState("18:00");
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [rotationSteps, setRotationSteps] = useState<ScheduleRotationStep[]>([]);
   const [saving, setSaving] = useState(false);
+
+  // 24-Hour Screen Broadcast Timeline preview selectors
+  const [timelineScreenId, setTimelineScreenId] = useState(
+    data.screens[0]?.id ?? ""
+  );
+  const [timelineDay, setTimelineDay] = useState<number>(1);
 
   function resetScheduleForm() {
     setEditingScheduleId(null);
@@ -107,6 +118,7 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
     setDaypartStart("08:00");
     setDaypartEnd("18:00");
     setDaysOfWeek([1, 2, 3, 4, 5]);
+    setRotationSteps([]);
   }
 
   function startEditSchedule(sch: ScheduleItem) {
@@ -124,6 +136,7 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
         ? sch.daysOfWeek
         : [1, 2, 3, 4, 5]
     );
+    setRotationSteps(sch.rotationSequence ?? []);
     setShowCreate(true);
   }
 
@@ -196,6 +209,7 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
           daysOfWeek,
           daypartStart,
           daypartEnd,
+          rotationSequence: rotationSteps.length > 0 ? rotationSteps : null,
         }),
       });
       const j = await res.json();
@@ -496,6 +510,164 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
                 </div>
               </div>
 
+              {/* Chained Sequential Rotation Loop (Playlist A -> Promotions -> Playlist B -> Loop) */}
+              <div className="space-y-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-3 md:col-span-12">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <Label className="flex items-center gap-1.5 text-xs font-semibold text-zinc-900">
+                      <Repeat className="size-3.5 text-blue-600" />
+                      Sequential Playlist &amp; Promotions Loop (Optional)
+                    </Label>
+                    <p className="text-[11px] text-zinc-500">
+                      Chain multiple playlists, targeted Promotions, and Employee Spotlights back-to-back during this daypart window — transitions seamlessly in fullscreen!
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={() =>
+                        setRotationSteps((prev) => [
+                          ...prev,
+                          {
+                            kind: "playlist",
+                            playlistId: playlistId || data.playlists[0]?.id || null,
+                            label:
+                              playlistById.get(playlistId || data.playlists[0]?.id || "")
+                                ?.name || "Playlist",
+                            durationMinutes: 15,
+                          },
+                        ])
+                      }
+                    >
+                      <Plus className="size-3" />
+                      Add Playlist Step
+                    </Button>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={() =>
+                        setRotationSteps((prev) => [
+                          ...prev,
+                          {
+                            kind: "promotions",
+                            playlistId: null,
+                            label: "Active Promotions",
+                            durationMinutes: 5,
+                          },
+                        ])
+                      }
+                    >
+                      <Plus className="size-3 text-amber-600" />
+                      Add Promotions Block
+                    </Button>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={() =>
+                        setRotationSteps((prev) => [
+                          ...prev,
+                          {
+                            kind: "recognitions",
+                            playlistId: null,
+                            label: "Employee Spotlights",
+                            durationMinutes: 3,
+                          },
+                        ])
+                      }
+                    >
+                      <Plus className="size-3 text-violet-600" />
+                      Add Employee Spotlight
+                    </Button>
+                  </div>
+                </div>
+
+                {rotationSteps.length > 0 && (
+                  <div className="space-y-1.5 pt-1">
+                    {rotationSteps.map((step, idx) => (
+                      <div
+                        key={idx}
+                        className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs"
+                      >
+                        <Badge variant="outline" className="font-mono text-[10px]">
+                          #{idx + 1}
+                        </Badge>
+                        {step.kind === "playlist" ? (
+                          <select
+                            value={step.playlistId ?? ""}
+                            onChange={(e) => {
+                              const nextPlId = e.target.value;
+                              const nextName =
+                                playlistById.get(nextPlId)?.name ?? "Playlist";
+                              setRotationSteps((prev) =>
+                                prev.map((s, i) =>
+                                  i === idx
+                                    ? { ...s, playlistId: nextPlId, label: nextName }
+                                    : s
+                                )
+                              );
+                            }}
+                            className="h-7 min-w-[180px] flex-1 rounded-md border border-zinc-200 bg-white px-2 text-xs"
+                          >
+                            {data.playlists.map((pl) => (
+                              <option key={pl.id} value={pl.id}>
+                                Playlist: {pl.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="flex-1 font-semibold text-zinc-800">
+                            {step.kind === "promotions"
+                              ? "Targeted Active Promotions Block"
+                              : "Employee of the Month / Quarter / Year Spotlights"}
+                          </span>
+                        )}
+                        <div className="flex items-center gap-1">
+                          <span className="text-[11px] text-zinc-500">Air for</span>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={720}
+                            className="h-7 w-16 text-center font-mono text-xs"
+                            value={step.durationMinutes}
+                            onChange={(e) =>
+                              setRotationSteps((prev) =>
+                                prev.map((s, i) =>
+                                  i === idx
+                                    ? {
+                                        ...s,
+                                        durationMinutes: Math.max(
+                                          1,
+                                          Number(e.target.value) || 5
+                                        ),
+                                      }
+                                    : s
+                                )
+                              )
+                            }
+                          />
+                          <span className="text-[11px] text-zinc-500">min</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRotationSteps((prev) =>
+                              prev.filter((_, i) => i !== idx)
+                            )
+                          }
+                          className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-rose-500"
+                        >
+                          <X className="size-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="flex items-end justify-end gap-2 md:col-span-12">
                 <Button
                   type="button"
@@ -521,6 +693,133 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
           </CardContent>
         </Card>
       )}
+
+      {/* Interactive 24-Hour Screen Broadcast Timeline Visualizer */}
+      {data.screens.length > 0 && (() => {
+        const selectedScreen =
+          data.screens.find((s) => s.id === timelineScreenId) ?? data.screens[0];
+        const branch = branchById.get(selectedScreen.branchId);
+        const country = branch ? countryById.get(branch.countryId) : undefined;
+        const scheduleRecords = data.schedules.map((s) => ({
+          id: s.id,
+          name: s.name,
+          playlistId: s.playlistId,
+          targetType: s.targetType,
+          targetId: s.targetId,
+          targetScreenRole: s.targetScreenRole,
+          priority: s.priority,
+          startDate: null,
+          endDate: null,
+          daysOfWeek: s.daysOfWeek ?? [0, 1, 2, 3, 4, 5, 6],
+          daypartStart: s.daypartStart,
+          daypartEnd: s.daypartEnd,
+          rotationSequence: s.rotationSequence ?? null,
+          isActive: s.isActive,
+        }));
+        const timelineSlots = buildDailyBroadcastTimeline(
+          scheduleRecords,
+          {
+            screenId: selectedScreen.id,
+            branchId: selectedScreen.branchId,
+            countryId: branch?.countryId ?? null,
+            groupId: selectedScreen.groupId ?? null,
+            screenRole: selectedScreen.screenRole,
+            timezone: country?.timezone ?? "Africa/Nairobi",
+          },
+          timelineDay
+        );
+
+        return (
+          <Card className="border-zinc-200 bg-white">
+            <CardContent className="space-y-3 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Tv className="size-4 text-blue-600" />
+                  <p className="text-xs font-semibold text-zinc-950">
+                    24-Hour Screen Broadcast Preview
+                  </p>
+                  <span className="text-[11px] text-zinc-500">
+                    (Verify what plays at every hour)
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="w-52">
+                    <ModernSelect
+                      size="xs"
+                      value={selectedScreen.id}
+                      onValueChange={setTimelineScreenId}
+                      options={data.screens.map((s) => ({
+                        value: s.id,
+                        label: s.name,
+                      }))}
+                    />
+                  </div>
+                  <div className="flex gap-1">
+                    {DAY_LABELS.map((d) => (
+                      <button
+                        key={d.idx}
+                        type="button"
+                        onClick={() => setTimelineDay(d.idx)}
+                        className={`rounded px-2 py-1 text-[10px] font-semibold ${
+                          timelineDay === d.idx
+                            ? "bg-zinc-950 text-white"
+                            : "border border-zinc-200 bg-white text-zinc-500"
+                        }`}
+                      >
+                        {d.short}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-12 gap-1 sm:grid-cols-24">
+                {timelineSlots.map((slot) => {
+                  const plName = slot.playlistId
+                    ? playlistById.get(slot.playlistId)?.name
+                    : null;
+                  return (
+                    <div
+                      key={slot.hour}
+                      title={`${slot.label} — ${
+                        slot.scheduleName
+                          ? `${slot.scheduleName} (${plName ?? "Playlist"})${slot.hasRotation ? " • Chained Loop" : ""}`
+                          : "Default Assigned Playlist"
+                      }`}
+                      className={`flex flex-col items-center justify-center rounded-md border py-1.5 text-center ${
+                        slot.hasRotation
+                          ? "border-violet-300 bg-violet-100 text-violet-900"
+                          : slot.scheduleName
+                            ? "border-blue-300 bg-blue-100 text-blue-900"
+                            : "border-zinc-200 bg-zinc-50 text-zinc-400"
+                      }`}
+                    >
+                      <span className="font-mono text-[9px] font-bold">
+                        {String(slot.hour).padStart(2, "0")}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4 text-[10px] text-zinc-500">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="size-2.5 rounded-sm bg-blue-200 ring-1 ring-blue-300" />
+                  Scheduled Daypart Playlist
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="size-2.5 rounded-sm bg-violet-200 ring-1 ring-violet-300" />
+                  Chained Playlist / Promotions Loop
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="size-2.5 rounded-sm bg-zinc-100 ring-1 ring-zinc-300" />
+                  Default Screen Playlist (Hover any hour for details)
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Schedule Cards */}
       {data.schedules.length === 0 ? (
@@ -556,6 +855,22 @@ export function SchedulesTab({ data, onRefresh }: SchedulesTabProps) {
                           {pl?.name ?? "Unknown"}
                         </strong>
                       </p>
+                      {sch.rotationSequence && sch.rotationSequence.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                          <Badge variant="info" className="text-[10px]">
+                            <Repeat className="size-2.5" />
+                            Loop:
+                          </Badge>
+                          {sch.rotationSequence.map((st, i) => (
+                            <span
+                              key={i}
+                              className="rounded border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700"
+                            >
+                              {st.label || st.kind} ({st.durationMinutes}m)
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-1">
