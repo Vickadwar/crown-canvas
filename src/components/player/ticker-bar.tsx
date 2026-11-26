@@ -34,6 +34,8 @@ interface TickerBarProps {
   compact?: boolean;
   partnerLogos?: TickerPartnerLogo[];
   partnerMode?: "pinned_right" | "inline_scroll" | "hidden" | string;
+  /** Optional exact width class (e.g. `w-[clamp(260px,24vw,430px)]`) so the right logo dock border aligns flush with the right sidebar above it */
+  rightRailWidthClass?: string;
 }
 
 function GooglePlayBadge() {
@@ -139,6 +141,7 @@ export function TickerBar({
   compact = false,
   partnerLogos = [],
   partnerMode = "pinned_right",
+  rightRailWidthClass,
 }: TickerBarProps) {
   const [partnerStep, setPartnerStep] = useState(0);
   const activePartners = partnerLogos.filter((p) => Boolean(p.logoUrl));
@@ -242,23 +245,33 @@ export function TickerBar({
         </div>
       </div>
 
-      {/* Pinned Compact 2-Logo Rotating Showcase Rail (Brand & Partner Logos — No Label) */}
+      {/* Pinned Compact 2-Logo Rotating Showcase Rail (Aligned flush with Right Sidebar border when present) */}
       {showPinnedPartners && (
         <div
-          className={`z-10 flex h-full shrink-0 items-center border-l border-zinc-200 bg-gradient-to-l from-zinc-50 via-white to-white ${
-            compact ? "px-2.5" : "px-3.5"
+          className={`z-10 flex h-full shrink-0 items-center justify-center border-l border-zinc-200 bg-gradient-to-l from-zinc-50 via-white to-white ${
+            rightRailWidthClass
+              ? `${rightRailWidthClass} px-3 xl:px-4`
+              : compact
+                ? "px-2.5"
+                : "px-3.5"
           }`}
         >
           <div
             key={`logo-pair-${pinnedSlice.map((p) => p.id).join("-")}`}
-            className="animate-crown-slide flex items-center gap-2"
+            className={`animate-crown-slide flex w-full items-center justify-center gap-2 ${
+              rightRailWidthClass ? "" : "w-auto"
+            }`}
           >
             {pinnedSlice.map((partner) => (
               <div
                 key={partner.id}
                 title={partner.name}
                 className={`flex items-center justify-center rounded-lg border border-zinc-200/80 bg-white px-2 shadow-2xs ${
-                  compact ? "h-9 w-[92px]" : "h-11 w-[112px]"
+                  rightRailWidthClass
+                    ? "h-11 min-w-0 flex-1 max-w-[172px]"
+                    : compact
+                      ? "h-9 w-[92px]"
+                      : "h-11 w-[112px]"
                 }`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -268,7 +281,7 @@ export function TickerBar({
                   className={
                     compact
                       ? "h-6 w-auto max-w-[78px] object-contain"
-                      : "h-8 w-auto max-w-[96px] object-contain"
+                      : "h-8 w-auto max-w-full object-contain"
                   }
                 />
               </div>

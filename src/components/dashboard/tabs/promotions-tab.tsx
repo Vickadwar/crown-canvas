@@ -36,6 +36,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -378,11 +379,10 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
           <button
             type="button"
             onClick={() => setSubTab("campaigns")}
-            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${
-              subTab === "campaigns"
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${subTab === "campaigns"
                 ? "bg-white text-zinc-950 shadow-2xs ring-1 ring-zinc-200/80"
                 : "text-zinc-500 hover:text-zinc-900"
-            }`}
+              }`}
           >
             <Megaphone className="size-3.5" />
             Agency Promotions ({promotions.length})
@@ -390,11 +390,10 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
           <button
             type="button"
             onClick={() => setSubTab("audio")}
-            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${
-              subTab === "audio"
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${subTab === "audio"
                 ? "bg-white text-zinc-950 shadow-2xs ring-1 ring-zinc-200/80"
                 : "text-zinc-500 hover:text-zinc-900"
-            }`}
+              }`}
           >
             <Music className="size-3.5" />
             Background Music ({audioTracks.length})
@@ -506,20 +505,19 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
                   </div>
                   <div className="space-y-1 md:col-span-3">
                     <Label className="text-xs">Start Date (Optional)</Label>
-                    <Input
-                      type="date"
-                      className="h-8 text-xs"
+                    <DatePicker
                       value={startDate}
-                      onChange={(e) => setStartDate(e.target.value)}
+                      onChange={setStartDate}
+                      placeholder="Starts immediately"
                     />
                   </div>
                   <div className="space-y-1 md:col-span-3">
                     <Label className="text-xs">Auto-Expiry Date (Optional)</Label>
-                    <Input
-                      type="date"
-                      className="h-8 text-xs"
+                    <DatePicker
                       value={endDate}
-                      onChange={(e) => setEndDate(e.target.value)}
+                      onChange={setEndDate}
+                      placeholder="No expiry"
+                      align="right"
                     />
                   </div>
                   <div className="space-y-1 md:col-span-2">
@@ -626,11 +624,10 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
                                     : [...prev, scr.id]
                                 )
                               }
-                              className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-xs transition ${
-                                checked
+                              className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-xs transition ${checked
                                   ? "border-zinc-950 bg-white font-semibold"
                                   : "border-zinc-200 bg-white/70 text-zinc-600"
-                              }`}
+                                }`}
                             >
                               <span className="truncate">{scr.name}</span>
                               {checked && (

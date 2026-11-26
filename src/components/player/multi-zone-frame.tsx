@@ -565,11 +565,14 @@ export function MultiZoneFrame({
         </aside>
       </div>
 
-      {/* Bottom Ticker Zone */}
+      {/* Bottom Ticker Zone (Right partner dock aligns flush with Right Sidebar vertical border) */}
       <TickerBar
         messages={tickerContent}
         partnerLogos={partnerLogos}
         partnerMode={partnerTickerMode}
+        rightRailWidthClass={
+          sidebarSide === "right" ? "w-[clamp(260px,24vw,430px)]" : undefined
+        }
       />
     </div>
   );

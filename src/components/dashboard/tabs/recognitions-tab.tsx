@@ -39,6 +39,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -497,20 +498,19 @@ export function RecognitionsTab({ data, onRefresh }: RecognitionsTabProps) {
             </div>
             <div className="space-y-1 md:col-span-2">
               <Label className="text-xs">Start Date</Label>
-              <Input
-                type="date"
-                className="h-8 text-xs"
+              <DatePicker
                 value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
+                onChange={setStartDate}
+                placeholder="Start date"
               />
             </div>
             <div className="space-y-1 md:col-span-2">
               <Label className="text-xs">End Date</Label>
-              <Input
-                type="date"
-                className="h-8 text-xs"
+              <DatePicker
                 value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
+                onChange={setEndDate}
+                placeholder="End date"
+                align="right"
               />
             </div>
             <div className="space-y-1 md:col-span-3">

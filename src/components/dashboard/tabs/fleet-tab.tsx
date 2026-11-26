@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Edit3,
+  Eraser,
   Layers,
   LayoutGrid,
   List,
@@ -1188,12 +1189,22 @@ export function FleetTab({ data, onRefresh }: FleetTabProps) {
                           <Button
                             size="icon-xs"
                             variant="ghost"
-                            title="Reload Display"
+                            title="Reload Display (Keeps Fullscreen)"
                             onClick={() =>
                               void handleSendCommand(scr.id, "reload")
                             }
                           >
                             <RefreshCw className="size-3.5 text-zinc-600" />
+                          </Button>
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            title="Clear Local TV Cache & Re-Sync Media (Keeps Fullscreen)"
+                            onClick={() =>
+                              void handleSendCommand(scr.id, "clear_cache")
+                            }
+                          >
+                            <Eraser className="size-3.5 text-violet-600" />
                           </Button>
                           <Button
                             size="icon-xs"

@@ -874,13 +874,28 @@ export function PlayerClient() {
               payload.command === "reload" ||
               payload.command === "restart_player"
             ) {
-              // Mark command executed in DB BEFORE reloading so the next heartbeat never re-triggers reload
+              // Fullscreen-preserving Soft Reload: refreshes manifest, layout, schedules & slides
+              // in-place without calling window.location.reload() so TV stays 100% in Fullscreen!
               void ackImmediately().finally(() => {
-                window.location.reload();
+                manifestEtagRef.current = null;
+                setCorsFallbackKey(null);
+                setStandbyBypass(false);
+                setVideoManualPaused(false);
+                setCurrentIndex(0);
+                void syncManifest(deviceToken, true);
               });
             } else if (payload.command === "clear_cache") {
+              // Clears local disk cache + revokes blob URLs & re-syncs cleanly without leaving Fullscreen
               void ackImmediately()
-                .then(() => clearPlayerMediaCache())
+                .then(async () => {
+                  for (const u of blobUrlsRef.current.values()) {
+                    URL.revokeObjectURL(u);
+                  }
+                  blobUrlsRef.current.clear();
+                  setSlotUrls({});
+                  manifestEtagRef.current = null;
+                  await clearPlayerMediaCache();
+                })
                 .then(() => syncManifest(deviceToken, true));
             } else if (payload.command === "screenshot") {
               void ackImmediately().then(() =>
@@ -945,6 +960,12 @@ export function PlayerClient() {
             setIdentifyBanner(true);
             setTimeout(() => setIdentifyBanner(false), 10_000);
           } else if (cmd.command === "clear_cache") {
+            for (const u of blobUrlsRef.current.values()) {
+              URL.revokeObjectURL(u);
+            }
+            blobUrlsRef.current.clear();
+            setSlotUrls({});
+            manifestEtagRef.current = null;
             await clearPlayerMediaCache();
             await syncManifest(deviceToken, true);
           } else if (cmd.command === "screenshot") {
@@ -953,8 +974,13 @@ export function PlayerClient() {
             cmd.command === "reload" ||
             cmd.command === "restart_player"
           ) {
-            window.location.reload();
-            return;
+            // Fullscreen-preserving in-place soft reload (never exits TV Fullscreen)
+            manifestEtagRef.current = null;
+            setCorsFallbackKey(null);
+            setStandbyBypass(false);
+            setVideoManualPaused(false);
+            setCurrentIndex(0);
+            await syncManifest(deviceToken, true);
           }
         }
       } catch {
@@ -1538,110 +1564,8 @@ export function PlayerClient() {
     return () => clearTimeout(t);
   }, [currentItem, activeItems.length]);
 
-  // Render Pure White Minimalist Universal Pairing Screen if not paired
-  if (!deviceToken && !demoMode) {
-    const codeChars = (pairingCode || "------").slice(0, 6).split("");
-    return (
-      <div className="studio-dot-grid relative flex min-h-screen w-full flex-col items-center justify-between overflow-hidden bg-[#FAFAFA] p-6 text-zinc-950 md:p-12">
-        {/* Top Minimalist Header */}
-        <header className="relative z-10 flex w-full max-w-5xl items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="rounded-xl border border-zinc-200 bg-white px-3.5 py-1.5 shadow-2xs">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={CROWN_OFFICIAL_LOGO_URL}
-                alt="Crown Paints"
-                className="h-9 w-auto object-contain"
-              />
-            </div>
-            <div className="hidden sm:block">
-              <p className="text-sm font-semibold tracking-tight text-zinc-950">
-                Crown Canvas
-              </p>
-              <p className="text-[11px] text-zinc-500">
-                Digital Signage Display Player
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-2xs">
-              {tvProfile.isTvBrowser ? (
-                <Tv className="size-3.5 text-zinc-900" />
-              ) : (
-                <Monitor className="size-3.5 text-zinc-900" />
-              )}
-              <span>{tvProfile.label}</span>
-            </div>
-            <div className="flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 font-mono text-xs font-medium text-zinc-700 shadow-2xs">
-              <Clock className="size-3.5 text-zinc-400" />
-              <span>{clockText}</span>
-            </div>
-          </div>
-        </header>
-
-        {/* Center Minimalist Pairing Card */}
-        <main className="relative z-10 my-auto w-full max-w-2xl rounded-3xl border border-zinc-200 bg-white p-8 text-center shadow-[0_8px_30px_rgba(0,0,0,0.04)] md:p-12">
-          <span className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-700">
-            <span className="size-2 rounded-full bg-emerald-500" />
-            Ready to Pair Display
-          </span>
-
-          <h1 className="mt-5 text-3xl font-bold tracking-tight text-zinc-950 md:text-5xl">
-            Connect This Screen
-          </h1>
-          <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-zinc-500 md:text-base">
-            Enter this 6-digit pairing code in the Crown Canvas CMS under{" "}
-            <strong className="font-semibold text-zinc-800">
-              Fleet &amp; Pairing
-            </strong>{" "}
-            to link this display.
-          </p>
-
-          <div
-            className={`mt-8 flex items-center justify-center gap-2.5 transition-opacity duration-200 md:gap-3.5 ${refreshingPin ? "opacity-45" : "opacity-100"
-              }`}
-          >
-            {codeChars.map((ch, idx) => (
-              <div
-                key={`${idx}-${ch}`}
-                className="flex h-16 w-12 items-center justify-center rounded-2xl border border-zinc-200 bg-zinc-50 font-mono text-3xl font-black tracking-tight text-zinc-950 shadow-2xs md:h-24 md:w-20 md:text-5xl"
-              >
-                {ch}
-              </div>
-            ))}
-          </div>
-
-          {!pairingConfigured && (
-            <p className="mx-auto mt-6 max-w-md rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 text-xs text-zinc-600">
-              Backend database credentials are not configured yet. Add your
-              cloud environment variables to activate screen pairing.
-            </p>
-          )}
-
-          <div className="mt-8 flex items-center justify-center">
-            <button
-              type="button"
-              disabled={refreshingPin}
-              onClick={() => void handleRefreshPairingCode()}
-              className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-zinc-200 bg-white px-5 text-xs font-semibold text-zinc-800 shadow-2xs transition hover:border-zinc-300 hover:bg-zinc-50 disabled:opacity-60"
-            >
-              <RefreshCw
-                className={`size-3.5 ${refreshingPin ? "animate-spin" : ""}`}
-              />
-              {refreshingPin ? "Generating New Code..." : "Refresh Pairing Code"}
-            </button>
-          </div>
-        </main>
-
-        {/* Bottom Minimalist Footer */}
-        <footer className="relative z-10 flex w-full max-w-5xl items-center justify-between text-xs text-zinc-400">
-          <span>Offline-First Local Cache • Multi-Zone Display Engine</span>
-          <span>Universal Screen Pairing</span>
-        </footer>
-      </div>
-    );
-  }
+  const isPairingScreen = !deviceToken && !demoMode;
+  const pairingCodeChars = (pairingCode || "------").slice(0, 6).split("");
 
   const slideDurationSec = Math.max(5, currentItem?.durationSeconds || 15);
   const isVideoSlide =
@@ -1703,7 +1627,10 @@ export function PlayerClient() {
     !standbyBypass &&
     Boolean(manifest?.branch);
   const isNormalPlayback =
-    !isScreenPaused && !activeFullscreenBroadcast && !isEcoStandby;
+    !isPairingScreen &&
+    !isScreenPaused &&
+    !activeFullscreenBroadcast &&
+    !isEcoStandby;
 
   const mainStageContent = !currentItem ? (
     <div className="flex h-full w-full flex-col items-center justify-center bg-[#060d1f] p-12 text-center">
@@ -1849,9 +1776,10 @@ export function PlayerClient() {
   return (
     <div
       ref={playerContainerRef}
-      style={rotationStyle}
-      className={`relative h-screen w-screen overflow-hidden bg-black text-white select-none ${cursorHidden ? "player-cursor-hidden" : ""
-        }`}
+      style={isPairingScreen ? undefined : rotationStyle}
+      className={`relative h-screen w-screen overflow-hidden select-none ${
+        isPairingScreen ? "bg-[#FAFAFA] text-zinc-950" : "bg-black text-white"
+      } ${!isPairingScreen && cursorHidden ? "player-cursor-hidden" : ""}`}
     >
       {/* Persistent Background Music Engine (Auto-Ducks on Video/Broadcast/Standby) */}
       <audio
@@ -1878,9 +1806,128 @@ export function PlayerClient() {
           />
         )}
 
-      {/* Single Persistent Fullscreen Stage: Paused, Emergency Broadcast, Eco-Standby, and Normal Playback
-          all mount INSIDE playerContainerRef so triggering/stopping a broadcast NEVER exits browser Fullscreen */}
-      {isScreenPaused && manifest ? (
+      {/* Single Eternal Fullscreen Stage: Pairing Code, Paused, Emergency Broadcast, Eco-Standby,
+          and Normal Playback ALL render INSIDE playerContainerRef so Delete/Unpair, Reload,
+          Clear Cache, Playlist Rotation, Employee Spotlights & Broadcasts NEVER exit Fullscreen! */}
+      {isPairingScreen ? (
+        <div className="studio-dot-grid animate-crown-slide relative flex h-full w-full flex-col items-center justify-between overflow-y-auto bg-[#FAFAFA] p-6 text-zinc-950 md:p-12">
+          {/* Top Minimalist Header */}
+          <header className="relative z-10 flex w-full max-w-5xl items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl border border-zinc-200 bg-white px-3.5 py-1.5 shadow-2xs">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={CROWN_OFFICIAL_LOGO_URL}
+                  alt="Crown Paints"
+                  className="h-9 w-auto object-contain"
+                />
+              </div>
+              <div className="hidden sm:block">
+                <p className="text-sm font-semibold tracking-tight text-zinc-950">
+                  Crown Canvas
+                </p>
+                <p className="text-[11px] text-zinc-500">
+                  Digital Signage Display Player
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-2xs">
+                {tvProfile.isTvBrowser ? (
+                  <Tv className="size-3.5 text-zinc-900" />
+                ) : (
+                  <Monitor className="size-3.5 text-zinc-900" />
+                )}
+                <span>{tvProfile.label}</span>
+              </div>
+              <div className="flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 font-mono text-xs font-medium text-zinc-700 shadow-2xs">
+                <Clock className="size-3.5 text-zinc-400" />
+                <span>{clockText}</span>
+              </div>
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 shadow-2xs transition hover:border-zinc-300 hover:bg-zinc-50"
+              >
+                {isFullscreen ? (
+                  <>
+                    <Minimize2 className="size-3.5 text-blue-600" />
+                    <span className="hidden sm:inline">Exit FS</span>
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="size-3.5 text-zinc-800" />
+                    <span className="hidden sm:inline">Fullscreen</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </header>
+
+          {/* Center Minimalist Pairing Card */}
+          <main className="relative z-10 my-auto w-full max-w-2xl rounded-3xl border border-zinc-200 bg-white p-8 text-center shadow-[0_8px_30px_rgba(0,0,0,0.04)] md:p-12">
+            <span className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-700">
+              <span className="size-2 rounded-full bg-emerald-500" />
+              Ready to Pair Display
+            </span>
+
+            <h1 className="mt-5 text-3xl font-bold tracking-tight text-zinc-950 md:text-5xl">
+              Connect This Screen
+            </h1>
+            <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-zinc-500 md:text-base">
+              Enter this 6-digit pairing code in the Crown Canvas CMS under{" "}
+              <strong className="font-semibold text-zinc-800">
+                Fleet &amp; Pairing
+              </strong>{" "}
+              to link this display.
+            </p>
+
+            <div
+              className={`mt-8 flex items-center justify-center gap-2.5 transition-opacity duration-200 md:gap-3.5 ${
+                refreshingPin ? "opacity-45" : "opacity-100"
+              }`}
+            >
+              {pairingCodeChars.map((ch, idx) => (
+                <div
+                  key={`${idx}-${ch}`}
+                  className="flex h-16 w-12 items-center justify-center rounded-2xl border border-zinc-200 bg-zinc-50 font-mono text-3xl font-black tracking-tight text-zinc-950 shadow-2xs md:h-24 md:w-20 md:text-5xl"
+                >
+                  {ch}
+                </div>
+              ))}
+            </div>
+
+            {!pairingConfigured && (
+              <p className="mx-auto mt-6 max-w-md rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 text-xs text-zinc-600">
+                Backend database credentials are not configured yet. Add your
+                cloud environment variables to activate screen pairing.
+              </p>
+            )}
+
+            <div className="mt-8 flex items-center justify-center">
+              <button
+                type="button"
+                disabled={refreshingPin}
+                onClick={() => void handleRefreshPairingCode()}
+                className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-zinc-200 bg-white px-5 text-xs font-semibold text-zinc-800 shadow-2xs transition hover:border-zinc-300 hover:bg-zinc-50 disabled:opacity-60"
+              >
+                <RefreshCw
+                  className={`size-3.5 ${refreshingPin ? "animate-spin" : ""}`}
+                />
+                {refreshingPin ? "Generating New Code..." : "Refresh Pairing Code"}
+              </button>
+            </div>
+          </main>
+
+          {/* Bottom Minimalist Footer */}
+          <footer className="relative z-10 flex w-full max-w-5xl items-center justify-between text-xs text-zinc-400">
+            <span>Offline-First Local Cache • Multi-Zone Display Engine</span>
+            <span>Universal Screen Pairing</span>
+          </footer>
+        </div>
+      ) : isScreenPaused && manifest ? (
         <div
           onDoubleClick={toggleFullscreen}
           className="flex h-full w-full flex-col items-center justify-center bg-[#09090b] p-12 text-center text-zinc-400 select-none"
@@ -2079,7 +2126,7 @@ export function PlayerClient() {
       )}
 
       {/* Brief Auto-Dismissing Smart TV Remote Hint (6s on launch when not fullscreen or sound blocked) */}
-      {showRemoteHint && !isFullscreen && (
+      {!isPairingScreen && showRemoteHint && !isFullscreen && (
         <div className="pointer-events-none fixed bottom-20 left-1/2 z-30 -translate-x-1/2 rounded-full border border-white/15 bg-black/80 px-4 py-2 text-xs font-medium text-white/95 shadow-2xl backdrop-blur-md">
           Press <span className="rounded bg-white/20 px-1.5 py-0.5 font-mono font-bold">OK</span> on remote for Fullscreen &amp; Sound •{" "}
           <span className="rounded bg-white/20 px-1.5 py-0.5 font-mono font-bold">↑</span> for Controls
@@ -2087,6 +2134,7 @@ export function PlayerClient() {
       )}
 
       {/* Hover & TV-Remote Broadcast Telemetry & Controls (reveals on mouse hover or Up/Info remote key) */}
+      {!isPairingScreen && (
       <div
         className={`group/hud pointer-events-auto absolute right-0 z-30 flex items-end justify-end p-4 ${hasMultiZoneLayout ||
           Boolean(
@@ -2221,9 +2269,10 @@ export function PlayerClient() {
           )}
         </div>
       </div>
+      )}
 
       {/* Subtle Bottom Edge Slide Progress Indicator (only in fullscreen mode) */}
-      {currentItem && !isVideoSlide && !hasMultiZoneLayout && (
+      {!isPairingScreen && currentItem && !isVideoSlide && !hasMultiZoneLayout && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 h-1 bg-white/10">
           <div
             key={`progress-${currentItem.id}-${safeIndex}`}

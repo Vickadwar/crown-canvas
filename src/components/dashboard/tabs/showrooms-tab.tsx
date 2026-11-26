@@ -42,6 +42,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { ModernSelect } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -883,11 +884,12 @@ export function ShowroomsTab({ data, onRefresh }: ShowroomsTabProps) {
                         </div>
 
                         <div className="grid grid-cols-12 gap-1.5">
-                          <Input
-                            type="date"
-                            className="col-span-4 h-7 text-[11px]"
+                          <DatePicker
+                            size="xs"
+                            className="col-span-4"
+                            placeholder="Select date..."
                             value={newExDate}
-                            onChange={(e) => setNewExDate(e.target.value)}
+                            onChange={setNewExDate}
                           />
                           <Input
                             className="col-span-5 h-7 text-[11px]"
