@@ -11,6 +11,8 @@ const patchPlaylistSchema = z.object({
   promoInjectEveryN: z.number().int().min(0).max(50).optional(),
   showPartnerLogos: z.boolean().optional(),
   partnerTickerMode: z.enum(["pinned_right", "inline_scroll", "hidden"]).optional(),
+  mediaFitMode: z.enum(["ambient_fit", "edge_cover"]).optional(),
+  stageBackdrop: z.enum(["ambient_blur", "crown_navy", "showroom_light"]).optional(),
   name: z.string().min(2).max(150).optional(),
   tickerText: z.string().max(1000).nullable().optional(),
   sidebarConfig: z

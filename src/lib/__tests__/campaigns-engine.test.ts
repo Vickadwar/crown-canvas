@@ -8,9 +8,11 @@ import {
 } from "../avatar-generator";
 import {
   buildDailyBroadcastTimeline,
+  chunkRecognitionsIntoWallPages,
   interleavePlaybackItems,
   matchesScreenTarget,
   resolveActiveRotationStep,
+  resolvePreservedSlideIndex,
   type ScheduleRecord,
 } from "../schedule-resolver";
 
@@ -191,4 +193,46 @@ test("buildDailyBroadcastTimeline builds 24 hourly broadcast slots for a screen"
   assert.equal(slots[10].scheduleName, "Weekday Showroom");
   assert.equal(slots[10].hasRotation, true);
   assert.equal(slots[19].scheduleName, null);
+});
+
+test("chunkRecognitionsIntoWallPages paginates 25 employees into 3 sequential 10-per-slide pages", () => {
+  const employees = Array.from({ length: 25 }, (_, i) => ({
+    id: `emp-${i + 1}`,
+    name: `Employee ${i + 1}`,
+  }));
+
+  const pages = chunkRecognitionsIntoWallPages(employees, 10);
+  assert.equal(pages.length, 3);
+  assert.equal(pages[0].page, 1);
+  assert.equal(pages[0].totalPages, 3);
+  assert.equal(pages[0].employees.length, 10);
+  assert.equal(pages[1].page, 2);
+  assert.equal(pages[1].employees.length, 10);
+  assert.equal(pages[2].page, 3);
+  assert.equal(pages[2].employees.length, 5);
+  assert.equal(pages[0].employees[0].id, "emp-1");
+  assert.equal(pages[1].employees[0].id, "emp-11");
+  assert.equal(pages[2].employees[4].id, "emp-25");
+
+  assert.deepEqual(chunkRecognitionsIntoWallPages([], 10), []);
+});
+
+test("resolvePreservedSlideIndex keeps currently playing video uninterrupted when promotions shift the queue", () => {
+  const refreshedQueue = [
+    { id: "vid-1" },
+    { id: "promo-new-1" },
+    { id: "vid-2" },
+    { id: "rec-wall-page-1" },
+    { id: "rec-wall-page-2" },
+  ];
+
+  // Currently playing vid-2 (was index 1, shifted to index 2 after promo injection)
+  assert.equal(resolvePreservedSlideIndex(refreshedQueue, "vid-2", 1), 2);
+
+  // If the current slide was removed, safely clamp fallback index inside the queue
+  assert.equal(resolvePreservedSlideIndex(refreshedQueue, "removed-slide", 9), 4);
+  assert.equal(resolvePreservedSlideIndex(refreshedQueue, null, 2), 2);
+
+  // Empty queue always returns 0
+  assert.equal(resolvePreservedSlideIndex([], "vid-2", 2), 0);
 });

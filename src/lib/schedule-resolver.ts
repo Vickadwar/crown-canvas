@@ -275,6 +275,52 @@ export function buildDailyBroadcastTimeline(
   return slots;
 }
 
+export interface RecognitionWallPage<T> {
+  page: number;
+  totalPages: number;
+  employees: T[];
+}
+
+/**
+ * Paginates a large list of Employee Recognitions into balanced wall slides of `pageSize`
+ * (default 10 per slide -> 5x2 grid on TVs) so every winner cycles cleanly until complete.
+ */
+export function chunkRecognitionsIntoWallPages<T>(
+  recognitions: T[],
+  pageSize = 10
+): RecognitionWallPage<T>[] {
+  if (recognitions.length === 0) return [];
+  const safeSize = Math.max(1, Math.min(20, Math.floor(pageSize)));
+  const totalPages = Math.ceil(recognitions.length / safeSize);
+  const pages: RecognitionWallPage<T>[] = [];
+  for (let i = 0; i < totalPages; i++) {
+    pages.push({
+      page: i + 1,
+      totalPages,
+      employees: recognitions.slice(i * safeSize, (i + 1) * safeSize),
+    });
+  }
+  return pages;
+}
+
+/**
+ * Keeps the currently playing slide playing uninterrupted when a manifest refreshes in the
+ * background (e.g., when a new Promotion or Employee Wall is pushed) by locating the active
+ * item ID in the updated queue instead of abruptly cutting out mid-video.
+ */
+export function resolvePreservedSlideIndex<T extends { id: string }>(
+  nextItems: T[],
+  activeItemId: string | null | undefined,
+  fallbackIndex: number
+): number {
+  if (nextItems.length === 0) return 0;
+  if (activeItemId) {
+    const foundIdx = nextItems.findIndex((item) => item.id === activeItemId);
+    if (foundIdx >= 0) return foundIdx;
+  }
+  return Math.max(0, fallbackIndex) % nextItems.length;
+}
+
 function getLocalClockAndDay(now: Date, timezone: string): {
   dayOfWeek: number;
   hhmm: string;

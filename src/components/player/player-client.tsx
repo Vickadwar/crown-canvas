@@ -60,11 +60,16 @@ import {
   type TvDeviceProfile,
 } from "@/lib/player/tv-browser-compat";
 import { evaluateOperatingStatus } from "@/lib/screen-health";
+import { resolvePreservedSlideIndex } from "@/lib/schedule-resolver";
 import {
   createSupabaseBrowserClient,
   isSupabaseConfigured,
 } from "@/lib/supabase/client";
-import { EmployeeSpotlightSlide } from "./employee-spotlight-slide";
+import {
+  EmployeeRecognitionWallSlide,
+  EmployeeSpotlightSlide,
+  type RecognitionWallEmployee,
+} from "./employee-spotlight-slide";
 import {
   MultiZoneFrame,
   type ActiveSidebarProfile,
@@ -124,6 +129,21 @@ type PlayerItem =
     departmentCode: string;
     audioTrackUrl?: string | null;
     audioVolumePercent?: number | null;
+  }
+  | {
+    id: string;
+    kind: "employee_recognition_wall";
+    title: string;
+    page: number;
+    totalPages: number;
+    totalEmployees: number;
+    awardPeriodType: "month" | "quarter" | "year" | "special";
+    awardPeriodLabel: string;
+    employees: RecognitionWallEmployee[];
+    durationSeconds: number;
+    departmentCode: string;
+    audioTrackUrl?: string | null;
+    audioVolumePercent?: number | null;
   };
 
 interface PlayerManifest {
@@ -162,6 +182,8 @@ interface PlayerManifest {
     audioVolumePercent?: number | null;
     showPartnerLogos?: boolean;
     partnerTickerMode?: "pinned_right" | "inline_scroll" | "hidden" | string;
+    mediaFitMode?: "ambient_fit" | "edge_cover" | string;
+    stageBackdrop?: "ambient_blur" | "crown_navy" | "showroom_light" | string;
   } | null;
   partnerLogos?: TickerPartnerLogo[];
   sidebarProfile?: ActiveSidebarProfile | null;
@@ -292,6 +314,8 @@ export function PlayerClient() {
   const pendingCommandAckRef = useRef<string[]>([]);
   const timezoneRef = useRef<string | undefined>(undefined);
   const manifestEtagRef = useRef<string | null>(null);
+  const manifestRef = useRef<PlayerManifest | null>(null);
+  const currentItemIdRef = useRef<string | null>(null);
   const currentItemTitleRef = useRef<string | null>(null);
   const activeVideoRef = useRef<HTMLVideoElement | null>(null);
   const bgAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -305,18 +329,14 @@ export function PlayerClient() {
   }>({});
 
   useEffect(() => {
+    manifestRef.current = manifest;
     timezoneRef.current = manifest?.country?.timezone;
     branchHoursRef.current = {
       openingTime: manifest?.branch?.openingTime,
       closingTime: manifest?.branch?.closingTime,
       operatingSchedule: manifest?.branch?.operatingSchedule ?? null,
     };
-  }, [
-    manifest?.country?.timezone,
-    manifest?.branch?.openingTime,
-    manifest?.branch?.closingTime,
-    manifest?.branch?.operatingSchedule,
-  ]);
+  }, [manifest]);
 
   // 1. Initialize stored device token, PWA Service Worker, clock, operating hours & Wake Lock
   useEffect(() => {
@@ -689,7 +709,6 @@ export function PlayerClient() {
         if (etag) manifestEtagRef.current = etag;
 
         const data = (await res.json()) as PlayerManifest;
-        setManifest(data);
         safeLocalSet(STORAGE_MANIFEST_KEY, JSON.stringify(data));
 
         if (
@@ -707,6 +726,20 @@ export function PlayerClient() {
         } else {
           setIsStandby(false);
           setStandbyReason("");
+        }
+
+        const prevManifest = manifestRef.current;
+        const isUrgentStateChange =
+          !prevManifest ||
+          Boolean(data.emergencyOverride) !== Boolean(prevManifest.emergencyOverride) ||
+          data.emergencyOverride?.id !== prevManifest.emergencyOverride?.id ||
+          Boolean(data.screenPaused) !== Boolean(prevManifest.screenPaused);
+
+        // Urgent states (initial boot, Emergency Broadcast, or Pause/Resume) apply immediately.
+        // Routine updates (new Promotions, Employee Walls, Playlist edits) download new R2 assets
+        // SILENTLY in the background first while the current video keeps playing with ZERO black screen!
+        if (isUrgentStateChange) {
+          setManifest(data);
         }
 
         const mediaRefs: ManifestAssetRef[] = data.items
@@ -784,6 +817,15 @@ export function PlayerClient() {
           setSyncProgress,
           tvProfileRef.current.maxCacheBytes
         );
+
+        // Commit background-staged manifest cleanly AFTER caching completes, preserving the
+        // currently playing slide's position so active videos finish smoothly with zero interruption!
+        if (!isUrgentStateChange) {
+          setCurrentIndex((prev) =>
+            resolvePreservedSlideIndex(data.items, currentItemIdRef.current, prev)
+          );
+          setManifest(data);
+        }
       } catch {
         // Offline: continue using previously cached manifest & local disk Cache Storage
       }
@@ -1061,8 +1103,9 @@ export function PlayerClient() {
   const nextItem = nextIndex !== null ? activeItems[nextIndex] : null;
 
   useEffect(() => {
+    currentItemIdRef.current = currentItem?.id ?? null;
     currentItemTitleRef.current = currentItem?.title ?? null;
-  }, [currentItem?.title]);
+  }, [currentItem?.id, currentItem?.title]);
 
   const currentMediaKey =
     currentItem?.kind === "media_asset"
@@ -1249,15 +1292,25 @@ export function PlayerClient() {
     return addFullscreenChangeListener(onFullscreenChange);
   }, []);
 
-  // Smart unmuted autoplay (ignores transient AbortError on source swap; silently recovers
-  // if browser policy requires a first gesture before unmuting)
+  // Stable primitive keys so background manifest refreshes NEVER reset an actively playing <video>
+  const activeVideoSlideId =
+    currentItem?.kind === "media_asset" && currentItem.mediaType === "video"
+      ? currentItem.id
+      : null;
+
+  // Keep mute state synced on the active <video> without tearing down its decoder
   useEffect(() => {
     const video = activeVideoRef.current;
-    if (
-      !video ||
-      currentItem?.kind !== "media_asset" ||
-      currentItem.mediaType !== "video"
-    ) {
+    if (!video || !activeVideoSlideId) return;
+    video.muted = isMuted || audioBlocked;
+    video.volume = 1;
+  }, [activeVideoSlideId, isMuted, audioBlocked]);
+
+  // Smart unmuted autoplay + low-RAM Smart TV hardware decoder cleanup keyed strictly
+  // on slide identity & playback source (never on manifest object identity!)
+  useEffect(() => {
+    const video = activeVideoRef.current;
+    if (!video || !activeVideoSlideId) {
       return;
     }
 
@@ -1276,8 +1329,6 @@ export function PlayerClient() {
         const errName = err instanceof DOMException ? err.name : "";
         if (errName === "AbortError") return;
         if (!isMuted && errName === "NotAllowedError") {
-          // Browser blocked unmuted autoplay before first user interaction:
-          // start playback smoothly muted without any intrusive popup, and auto-unmute on first gesture.
           video.muted = true;
           setAudioBlocked(true);
           try {
@@ -1292,8 +1343,7 @@ export function PlayerClient() {
     void attemptPlay();
     return () => {
       cancelled = true;
-      // Explicitly release hardware H.264/HEVC video decoder & GPU frame buffers on low-RAM Smart TVs
-      // (Samsung Tizen, LG webOS, Hisense VIDAA, Android TV) to prevent memory leaks over 24/7 playback.
+      // Release hardware H.264/HEVC decoder ONLY when actually switching away from this video slide
       try {
         video.pause();
         video.removeAttribute("src");
@@ -1302,10 +1352,11 @@ export function PlayerClient() {
         // Ignore cleanup errors on older TV engines
       }
     };
-  }, [currentItem, safeIndex, currentPlaybackUrl, isMuted, corsFallbackKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeVideoSlideId, currentPlaybackUrl, corsFallbackKey]);
 
   // Ambient Background Music Engine (Cloudflare R2 MP3/AAC) with Smart Auto-Ducking:
-  // Plays softly during silent images, agency Promotions, Studio slides & Employee Spotlights,
+  // Plays softly during silent images, agency Promotions, Studio slides & Employee Spotlights/Walls,
   // and automatically pauses whenever a Video, Web stream, Emergency Broadcast, Standby, or Mute is active.
   useEffect(() => {
     const audio = bgAudioRef.current;
@@ -1315,6 +1366,7 @@ export function PlayerClient() {
       Boolean(currentItem) &&
       (currentItem?.kind === "quick_post" ||
         currentItem?.kind === "employee_recognition" ||
+        currentItem?.kind === "employee_recognition_wall" ||
         (currentItem?.kind === "media_asset" &&
           (currentItem.mediaType === "image" || currentItem.mediaType === "pdf")));
 
@@ -1323,7 +1375,7 @@ export function PlayerClient() {
       Boolean(manifest?.screenPaused) ||
       Boolean(
         manifest?.emergencyOverride &&
-          manifest.emergencyOverride.overrideKind !== "playlist"
+        manifest.emergencyOverride.overrideKind !== "playlist"
       ) ||
       (isStandby && !standbyBypass) ||
       isMuted ||
@@ -1632,6 +1684,13 @@ export function PlayerClient() {
     !activeFullscreenBroadcast &&
     !isEcoStandby;
 
+  const mediaFitMode = manifest?.playlist?.mediaFitMode ?? "ambient_fit";
+  const stageBackdrop = manifest?.playlist?.stageBackdrop ?? "ambient_blur";
+  const stageBackdropClass =
+    stageBackdrop === "showroom_light"
+      ? "bg-gradient-to-br from-[#f8f6f2] via-white to-amber-50/70"
+      : "bg-[radial-gradient(ellipse_at_center,_#162a5c_0%,_#09142f_55%,_#040917_100%)]";
+
   const mainStageContent = !currentItem ? (
     <div className="flex h-full w-full flex-col items-center justify-center bg-[#060d1f] p-12 text-center">
       <div className="mb-5 rounded-2xl bg-white px-6 py-3 shadow-xl">
@@ -1649,9 +1708,20 @@ export function PlayerClient() {
         Waiting for a playlist or schedule to be assigned in Crown Canvas CMS.
       </p>
     </div>
+  ) : currentItem.kind === "employee_recognition_wall" ? (
+    <EmployeeRecognitionWallSlide
+      key={currentItem.id}
+      page={currentItem.page}
+      totalPages={currentItem.totalPages}
+      totalEmployees={currentItem.totalEmployees}
+      awardPeriodType={currentItem.awardPeriodType}
+      awardPeriodLabel={currentItem.awardPeriodLabel}
+      employees={currentItem.employees}
+      orientation={manifest?.screen?.orientation ?? "landscape"}
+    />
   ) : currentItem.kind === "employee_recognition" ? (
     <EmployeeSpotlightSlide
-      key={`${currentItem.id}-${safeIndex}`}
+      key={currentItem.id}
       employeeName={currentItem.employeeName}
       locationName={currentItem.locationName}
       departmentName={currentItem.departmentName}
@@ -1664,7 +1734,7 @@ export function PlayerClient() {
     />
   ) : currentItem.kind === "quick_post" ? (
     <QuickPostSlide
-      key={`${currentItem.id}-${safeIndex}`}
+      key={currentItem.id}
       title={currentItem.title}
       departmentName={currentItem.departmentName}
       templateType={currentItem.templateType}
@@ -1682,79 +1752,76 @@ export function PlayerClient() {
   ) : currentItem.mediaType === "video" ? (
     (() => {
       const cachedSlotUrl = currentMediaKey ? slotUrls[currentMediaKey] : undefined;
-      // Avoid double-downloading on first load while cache-engine is actively saving this clip
-      if (!cachedSlotUrl && syncProgress.status === "downloading") {
-        return (
-          <div className="flex h-full w-full flex-col items-center justify-center bg-black p-8 text-center text-zinc-300">
-            <HardDrive className="mb-3 size-8 animate-pulse text-sky-400" />
-            <p className="text-sm font-semibold text-white">
-              Caching &ldquo;{currentItem.title}&rdquo; to local display storage...
-            </p>
-            <p className="mt-1 text-xs text-zinc-400">
-              {syncProgress.cachedCount}/{syncProgress.totalCount} assets synced for zero-buffer offline playback
-            </p>
-          </div>
-        );
-      }
       const videoSrc = cachedSlotUrl || currentItem.publicUrl;
-      const slideKey = `${currentItem.id}-${safeIndex}`;
+      const slideKey = currentItem.id;
       const allowCors =
         corsFallbackKey !== slideKey &&
         shouldUseVideoCrossOrigin(
           videoSrc,
           typeof window !== "undefined" ? window.location.origin : undefined
         );
+      const isEdgeCover = mediaFitMode === "edge_cover";
       return (
-        <video
-          ref={activeVideoRef}
-          key={`${slideKey}-${allowCors ? "cors" : "plain"}`}
-          src={videoSrc}
-          className="h-full w-full bg-black object-contain"
-          autoPlay
-          muted={isMuted || audioBlocked}
-          playsInline
-          preload="auto"
-          crossOrigin={allowCors ? "anonymous" : undefined}
-          disablePictureInPicture
-          controlsList="nodownload nofullscreen"
-          onContextMenu={(e) => e.preventDefault()}
-          onDoubleClick={toggleFullscreen}
-          loop={activeItems.length === 1}
-          onStalled={(e) => {
-            if (!videoManualPaused) {
-              void e.currentTarget.play().catch(() => { });
-            }
-          }}
-          onEnded={() => {
-            setVideoManualPaused(false);
-            setCurrentIndex(
-              (prev) => (prev + 1) % Math.max(1, activeItems.length)
-            );
-          }}
-          onError={() => {
-            // If CORS attribute blocked playback on an external video host, retry once without crossOrigin
-            if (allowCors && !videoSrc.startsWith("blob:")) {
-              setCorsFallbackKey(slideKey);
-              return;
-            }
-            setVideoManualPaused(false);
-            setCurrentIndex(
-              (prev) => (prev + 1) % Math.max(1, activeItems.length)
-            );
-          }}
-        />
+        <div
+          className={`relative flex h-full w-full items-center justify-center overflow-hidden ${stageBackdropClass}`}
+        >
+          {/* Subtle ambient radial spotlight behind videos so letterbox edges glow cleanly instead of harsh dead black */}
+          {!isEdgeCover && stageBackdrop !== "showroom_light" && (
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.14),_transparent_52%),radial-gradient(circle_at_bottom,_rgba(251,191,36,0.12),_transparent_52%)]" />
+          )}
+          <video
+            ref={activeVideoRef}
+            key={`${slideKey}-${allowCors ? "cors" : "plain"}`}
+            src={videoSrc}
+            className={`relative z-10 h-full w-full ${isEdgeCover
+                ? "object-cover"
+                : "object-contain drop-shadow-[0_14px_40px_rgba(0,0,0,0.45)]"
+              }`}
+            autoPlay
+            muted={isMuted || audioBlocked}
+            playsInline
+            preload="auto"
+            crossOrigin={allowCors ? "anonymous" : undefined}
+            disablePictureInPicture
+            controlsList="nodownload nofullscreen"
+            onContextMenu={(e) => e.preventDefault()}
+            onDoubleClick={toggleFullscreen}
+            loop={activeItems.length === 1}
+            onStalled={(e) => {
+              if (!videoManualPaused) {
+                void e.currentTarget.play().catch(() => { });
+              }
+            }}
+            onEnded={() => {
+              setVideoManualPaused(false);
+              setCurrentIndex(
+                (prev) => (prev + 1) % Math.max(1, activeItems.length)
+              );
+            }}
+            onError={() => {
+              if (allowCors && !videoSrc.startsWith("blob:")) {
+                setCorsFallbackKey(slideKey);
+                return;
+              }
+              setVideoManualPaused(false);
+              setCurrentIndex(
+                (prev) => (prev + 1) % Math.max(1, activeItems.length)
+              );
+            }}
+          />
+        </div>
       );
     })()
   ) : currentItem.mediaType === "pdf" ? (
     <PdfSignageViewer
-      key={`${currentItem.id}-${safeIndex}`}
+      key={currentItem.id}
       url={currentPlaybackUrl || currentItem.publicUrl}
       title={currentItem.title}
       durationSeconds={currentItem.durationSeconds}
     />
   ) : currentItem.mediaType === "web_url" ? (
     <iframe
-      key={`${currentItem.id}-${safeIndex}`}
+      key={currentItem.id}
       src={currentItem.publicUrl}
       title={currentItem.title}
       className="h-full w-full border-0 bg-white"
@@ -1763,23 +1830,44 @@ export function PlayerClient() {
       referrerPolicy="no-referrer-when-downgrade"
     />
   ) : (
-    /* Offline player renders local CacheStorage blob: URLs directly */
-    /* eslint-disable-next-line @next/next/no-img-element */
-    <img
-      key={`${currentItem.id}-${safeIndex}`}
-      src={currentPlaybackUrl || currentItem.publicUrl}
-      alt={currentItem.title}
-      className="animate-crown-slide h-full w-full bg-black object-contain"
-    />
+    /* Ambient Poster / A4 Stage: eliminates black pillars on portrait A4 promotions while preserving 100% of artwork */
+    <div
+      key={currentItem.id}
+      className={`animate-crown-slide relative flex h-full w-full items-center justify-center overflow-hidden ${stageBackdropClass}`}
+    >
+      {stageBackdrop === "ambient_blur" && (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={currentPlaybackUrl || currentItem.publicUrl}
+            alt=""
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 h-full w-full scale-110 object-cover opacity-75 blur-2xl brightness-50 saturate-125"
+          />
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/25 via-transparent to-black/35" />
+        </>
+      )}
+      {stageBackdrop === "crown_navy" && (
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(251,191,36,0.16),_transparent_50%),radial-gradient(circle_at_bottom_left,_rgba(56,189,248,0.16),_transparent_50%)]" />
+      )}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={currentPlaybackUrl || currentItem.publicUrl}
+        alt={currentItem.title}
+        className={`relative z-10 h-full w-full ${mediaFitMode === "edge_cover"
+            ? "object-cover"
+            : "max-h-full max-w-full object-contain drop-shadow-[0_24px_55px_rgba(0,0,0,0.5)]"
+          }`}
+      />
+    </div>
   );
 
   return (
     <div
       ref={playerContainerRef}
       style={isPairingScreen ? undefined : rotationStyle}
-      className={`relative h-screen w-screen overflow-hidden select-none ${
-        isPairingScreen ? "bg-[#FAFAFA] text-zinc-950" : "bg-black text-white"
-      } ${!isPairingScreen && cursorHidden ? "player-cursor-hidden" : ""}`}
+      className={`relative h-screen w-screen overflow-hidden select-none ${isPairingScreen ? "bg-[#FAFAFA] text-zinc-950" : "bg-black text-white"
+        } ${!isPairingScreen && cursorHidden ? "player-cursor-hidden" : ""}`}
     >
       {/* Persistent Background Music Engine (Auto-Ducks on Video/Broadcast/Standby) */}
       <audio
@@ -1885,9 +1973,8 @@ export function PlayerClient() {
             </p>
 
             <div
-              className={`mt-8 flex items-center justify-center gap-2.5 transition-opacity duration-200 md:gap-3.5 ${
-                refreshingPin ? "opacity-45" : "opacity-100"
-              }`}
+              className={`mt-8 flex items-center justify-center gap-2.5 transition-opacity duration-200 md:gap-3.5 ${refreshingPin ? "opacity-45" : "opacity-100"
+                }`}
             >
               {pairingCodeChars.map((ch, idx) => (
                 <div
@@ -2135,140 +2222,140 @@ export function PlayerClient() {
 
       {/* Hover & TV-Remote Broadcast Telemetry & Controls (reveals on mouse hover or Up/Info remote key) */}
       {!isPairingScreen && (
-      <div
-        className={`group/hud pointer-events-auto absolute right-0 z-30 flex items-end justify-end p-4 ${hasMultiZoneLayout ||
-          Boolean(
-            manifest?.playlist?.tickerText &&
-            manifest.playlist.tickerText.trim().length > 0
-          )
-          ? "bottom-16"
-          : "bottom-0"
-          }`}
-      >
         <div
-          className={`flex items-center gap-2 rounded-full border border-white/15 bg-black/80 px-3.5 py-1.5 text-[11px] font-medium text-white/95 shadow-2xl backdrop-blur-md transition-all duration-200 ${remoteHudVisible
-            ? "pointer-events-auto translate-y-0 opacity-100"
-            : "pointer-events-none translate-y-1 opacity-0 group-hover/hud:pointer-events-auto group-hover/hud:translate-y-0 group-hover/hud:opacity-100 focus-within:pointer-events-auto focus-within:translate-y-0 focus-within:opacity-100"
+          className={`group/hud pointer-events-auto absolute right-0 z-30 flex items-end justify-end p-4 ${hasMultiZoneLayout ||
+            Boolean(
+              manifest?.playlist?.tickerText &&
+              manifest.playlist.tickerText.trim().length > 0
+            )
+            ? "bottom-16"
+            : "bottom-0"
             }`}
         >
-          {isOnline ? (
-            <Wifi className="size-3 text-emerald-400" />
-          ) : (
-            <WifiOff className="size-3 text-amber-400" />
-          )}
-          {!hasMultiZoneLayout && (
-            <>
-              <span className="font-mono text-white/80">{clockText} EAT</span>
-              <span className="text-white/30">•</span>
-            </>
-          )}
-          <span
-            className="flex items-center gap-1"
-            title={
-              demoMode
-                ? "Built-in 6-slide Demo Showcase — click Exit to pair this screen to your live CMS playlist"
-                : "Live paired playlist & local Cache Storage status"
-            }
-          >
-            <HardDrive className="size-3 text-sky-400" />
-            {demoMode
-              ? `Showcase ${safeIndex + 1}/${activeItems.length} (Demo)`
-              : `${manifest?.playlist?.name ? `${manifest.playlist.name} v${manifest.playlist.version} • ` : ""}${activeItems.length > 0 ? `${safeIndex + 1}/${activeItems.length} • ` : ""}${syncProgress.status === "synced"
-                ? `Cached (${syncProgress.cachedCount})`
-                : `Syncing ${syncProgress.cachedCount}/${syncProgress.totalCount}`
+          <div
+            className={`flex items-center gap-2 rounded-full border border-white/15 bg-black/80 px-3.5 py-1.5 text-[11px] font-medium text-white/95 shadow-2xl backdrop-blur-md transition-all duration-200 ${remoteHudVisible
+              ? "pointer-events-auto translate-y-0 opacity-100"
+              : "pointer-events-none translate-y-1 opacity-0 group-hover/hud:pointer-events-auto group-hover/hud:translate-y-0 group-hover/hud:opacity-100 focus-within:pointer-events-auto focus-within:translate-y-0 focus-within:opacity-100"
               }`}
-          </span>
-          <button
-            type="button"
-            onClick={toggleMuted}
-            title={isMuted || audioBlocked ? "Enable Video Audio (M)" : "Mute Video Audio (M)"}
-            className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium transition hover:bg-white/25"
           >
-            {isMuted || audioBlocked ? (
-              <>
-                <VolumeX className="size-3 text-amber-300" />
-                <span>Muted</span>
-              </>
+            {isOnline ? (
+              <Wifi className="size-3 text-emerald-400" />
             ) : (
+              <WifiOff className="size-3 text-amber-400" />
+            )}
+            {!hasMultiZoneLayout && (
               <>
-                <Volume2 className="size-3 text-emerald-400" />
-                <span>Sound</span>
+                <span className="font-mono text-white/80">{clockText} EAT</span>
+                <span className="text-white/30">•</span>
               </>
             )}
-          </button>
-          <button
-            type="button"
-            onClick={toggleFullscreen}
-            title={isFullscreen ? "Exit Fullscreen (F)" : "Fullscreen Player (Keeps Split Sidebar) (F)"}
-            className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium transition hover:bg-white/25"
-          >
-            {isFullscreen ? (
-              <>
-                <Minimize2 className="size-3 text-sky-300" />
-                <span>Exit FS</span>
-              </>
-            ) : (
-              <>
-                <Maximize2 className="size-3 text-white/90" />
-                <span>Fullscreen</span>
-              </>
-            )}
-          </button>
-          {!demoMode && deviceToken && (
+            <span
+              className="flex items-center gap-1"
+              title={
+                demoMode
+                  ? "Built-in 6-slide Demo Showcase — click Exit to pair this screen to your live CMS playlist"
+                  : "Live paired playlist & local Cache Storage status"
+              }
+            >
+              <HardDrive className="size-3 text-sky-400" />
+              {demoMode
+                ? `Showcase ${safeIndex + 1}/${activeItems.length} (Demo)`
+                : `${manifest?.playlist?.name ? `${manifest.playlist.name} v${manifest.playlist.version} • ` : ""}${activeItems.length > 0 ? `${safeIndex + 1}/${activeItems.length} • ` : ""}${syncProgress.status === "synced"
+                  ? `Cached (${syncProgress.cachedCount})`
+                  : `Syncing ${syncProgress.cachedCount}/${syncProgress.totalCount}`
+                }`}
+            </span>
             <button
               type="button"
-              onClick={resetLocalPairing}
-              title="Reset Screen Pairing"
-              className="rounded-full bg-white/10 p-1 transition hover:bg-red-500/40"
+              onClick={toggleMuted}
+              title={isMuted || audioBlocked ? "Enable Video Audio (M)" : "Mute Video Audio (M)"}
+              className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium transition hover:bg-white/25"
             >
-              <RotateCcw className="size-3 text-slate-300" />
+              {isMuted || audioBlocked ? (
+                <>
+                  <VolumeX className="size-3 text-amber-300" />
+                  <span>Muted</span>
+                </>
+              ) : (
+                <>
+                  <Volume2 className="size-3 text-emerald-400" />
+                  <span>Sound</span>
+                </>
+              )}
             </button>
-          )}
-          {demoMode && activeItems.length > 1 && (
-            <div className="ml-1 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "Exit Fullscreen (F)" : "Fullscreen Player (Keeps Split Sidebar) (F)"}
+              className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium transition hover:bg-white/25"
+            >
+              {isFullscreen ? (
+                <>
+                  <Minimize2 className="size-3 text-sky-300" />
+                  <span>Exit FS</span>
+                </>
+              ) : (
+                <>
+                  <Maximize2 className="size-3 text-white/90" />
+                  <span>Fullscreen</span>
+                </>
+              )}
+            </button>
+            {!demoMode && deviceToken && (
               <button
                 type="button"
-                onClick={() => setDemoSplitView((prev) => !prev)}
-                className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold transition hover:bg-white/25"
-                title="Toggle Multi-Zone Split Canvas"
+                onClick={resetLocalPairing}
+                title="Reset Screen Pairing"
+                className="rounded-full bg-white/10 p-1 transition hover:bg-red-500/40"
               >
-                <LayoutPanelLeft className="size-3 text-amber-400" />
-                {demoSplitView ? "Split" : "Full"}
+                <RotateCcw className="size-3 text-slate-300" />
               </button>
-              <button
-                type="button"
-                aria-label="Previous slide"
-                onClick={() =>
-                  setCurrentIndex(
-                    (prev) =>
-                      (prev - 1 + activeItems.length) % activeItems.length
-                  )
-                }
-                className="rounded-full bg-white/10 p-1 transition hover:bg-white/25"
-              >
-                <ChevronLeft className="size-3" />
-              </button>
-              <button
-                type="button"
-                aria-label="Next slide"
-                onClick={() =>
-                  setCurrentIndex((prev) => (prev + 1) % activeItems.length)
-                }
-                className="rounded-full bg-white/10 p-1 transition hover:bg-white/25"
-              >
-                <ChevronRight className="size-3" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setDemoMode(false)}
-                className="ml-0.5 rounded-full bg-white/15 px-2.5 py-0.5 text-[10px] font-semibold transition hover:bg-white/25"
-              >
-                Exit
-              </button>
-            </div>
-          )}
+            )}
+            {demoMode && activeItems.length > 1 && (
+              <div className="ml-1 flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setDemoSplitView((prev) => !prev)}
+                  className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold transition hover:bg-white/25"
+                  title="Toggle Multi-Zone Split Canvas"
+                >
+                  <LayoutPanelLeft className="size-3 text-amber-400" />
+                  {demoSplitView ? "Split" : "Full"}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Previous slide"
+                  onClick={() =>
+                    setCurrentIndex(
+                      (prev) =>
+                        (prev - 1 + activeItems.length) % activeItems.length
+                    )
+                  }
+                  className="rounded-full bg-white/10 p-1 transition hover:bg-white/25"
+                >
+                  <ChevronLeft className="size-3" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Next slide"
+                  onClick={() =>
+                    setCurrentIndex((prev) => (prev + 1) % activeItems.length)
+                  }
+                  className="rounded-full bg-white/10 p-1 transition hover:bg-white/25"
+                >
+                  <ChevronRight className="size-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDemoMode(false)}
+                  className="ml-0.5 rounded-full bg-white/15 px-2.5 py-0.5 text-[10px] font-semibold transition hover:bg-white/25"
+                >
+                  Exit
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
       )}
 
       {/* Subtle Bottom Edge Slide Progress Indicator (only in fullscreen mode) */}

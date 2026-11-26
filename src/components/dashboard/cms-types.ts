@@ -316,6 +316,8 @@ export interface PlaylistRecord {
   promoInjectEveryN?: number;
   showPartnerLogos?: boolean;
   partnerTickerMode?: "pinned_right" | "inline_scroll" | "hidden" | string;
+  mediaFitMode?: "ambient_fit" | "edge_cover" | string;
+  stageBackdrop?: "ambient_blur" | "crown_navy" | "showroom_light" | string;
   tickerText?: string | null;
   sidebarConfig?: PlaylistSidebarConfig | null;
   isActive: boolean;

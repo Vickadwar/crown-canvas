@@ -14,6 +14,7 @@ import {
   Award,
   Building2,
   Check,
+  CheckSquare,
   Download,
   FileSpreadsheet,
   MapPin,
@@ -23,6 +24,7 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  Square,
   Trash2,
   Trophy,
   Upload,
@@ -111,7 +113,46 @@ export function RecognitionsTab({ data, onRefresh }: RecognitionsTabProps) {
 
   // Excel Bulk Import Preview Queue
   const [drafts, setDrafts] = useState<ParsedRecognitionDraft[]>([]);
+  const [replaceExisting, setReplaceExisting] = useState(false);
   const [importing, setImporting] = useState(false);
+
+  // Bulk Cleanup & Cycle Management
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedPeriodToDelete, setSelectedPeriodToDelete] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  const periodCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of recognitions) {
+      const label = (r.awardPeriodLabel || "").trim();
+      if (!label) continue;
+      map.set(label, (map.get(label) ?? 0) + 1);
+    }
+    return Array.from(map.entries()).map(([label, count]) => ({
+      label,
+      count,
+    }));
+  }, [recognitions]);
+
+  const effectiveDeletePeriod = useMemo(() => {
+    if (
+      selectedPeriodToDelete &&
+      periodCounts.some((p) => p.label === selectedPeriodToDelete)
+    ) {
+      return selectedPeriodToDelete;
+    }
+    return periodCounts[0]?.label ?? "";
+  }, [selectedPeriodToDelete, periodCounts]);
+
+  const activeRecognitionsCount = useMemo(
+    () => recognitions.filter((r) => r.isActive).length,
+    [recognitions]
+  );
+
+  const validSelectedIds = useMemo(() => {
+    const existingSet = new Set(recognitions.map((r) => r.id));
+    return selectedIds.filter((id) => existingSet.has(id));
+  }, [recognitions, selectedIds]);
 
   // Single Manual Add Drawer
   const [showManual, setShowManual] = useState(false);
@@ -271,7 +312,10 @@ export function RecognitionsTab({ data, onRefresh }: RecognitionsTabProps) {
     return found?.id ?? null;
   }
 
-  async function publishItems(items: ParsedRecognitionDraft[]) {
+  async function publishItems(
+    items: ParsedRecognitionDraft[],
+    options?: { replaceExisting?: boolean }
+  ) {
     if (targetMode === "screens" && selectedScreenIds.length === 0) {
       toast.error("Select at least one target screen.");
       return;
@@ -279,6 +323,7 @@ export function RecognitionsTab({ data, onRefresh }: RecognitionsTabProps) {
     setImporting(true);
     try {
       const payload = {
+        replaceExisting: Boolean(options?.replaceExisting),
         items: items.map((d) => ({
           employeeName: d.employeeName,
           locationName: d.locationName,
@@ -320,9 +365,12 @@ export function RecognitionsTab({ data, onRefresh }: RecognitionsTabProps) {
       }
 
       toast.success(
-        `Published ${items.length} Employee Spotlight(s) live to TVs!`
+        options?.replaceExisting
+          ? `Replaced previous cycle & published ${items.length} Employee Spotlight(s)!`
+          : `Published ${items.length} Employee Spotlight(s) live to TVs!`
       );
       setDrafts([]);
+      setReplaceExisting(false);
       setShowManual(false);
       setEmpName("");
       setEmpCitation("");
@@ -364,8 +412,85 @@ export function RecognitionsTab({ data, onRefresh }: RecognitionsTabProps) {
       toast.error("Failed to remove spotlight");
       return;
     }
+    setSelectedIds((prev) => prev.filter((id) => id !== r.id));
     toast.success(`Removed "${r.employeeName}"`);
     await onRefresh();
+  }
+
+  async function runBulkDelete(
+    body: { ids?: string[]; awardPeriodLabel?: string; clearAll?: boolean },
+    successMessage: string
+  ) {
+    setBulkBusy(true);
+    try {
+      const res = await fetch("/api/recognitions", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        deletedCount?: number;
+      };
+      if (!res.ok) {
+        toast.error(json.error || "Bulk delete failed");
+        return;
+      }
+      setSelectedIds([]);
+      toast.success(
+        `${successMessage} (${json.deletedCount ?? 0} removed)`
+      );
+      await onRefresh();
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function handleBulkDeleteSelected() {
+    if (validSelectedIds.length === 0) return;
+    const ok = await confirm({
+      title: `Delete ${validSelectedIds.length} selected spotlight(s)?`,
+      description:
+        "Selected employee recognitions will be permanently removed from all paired TVs.",
+      confirmLabel: `Delete ${validSelectedIds.length} Selected`,
+      variant: "danger",
+    });
+    if (!ok) return;
+    await runBulkDelete(
+      { ids: validSelectedIds },
+      "Deleted selected spotlights"
+    );
+  }
+
+  async function handleDeleteByPeriod() {
+    if (!effectiveDeletePeriod) return;
+    const periodInfo = periodCounts.find(
+      (p) => p.label === effectiveDeletePeriod
+    );
+    const ok = await confirm({
+      title: `Delete all "${effectiveDeletePeriod}" recognitions?`,
+      description: `This permanently clears ${periodInfo?.count ?? "all"} spotlight(s) tagged "${effectiveDeletePeriod}" so outdated award cycles no longer air on TVs.`,
+      confirmLabel: `Clear "${effectiveDeletePeriod}"`,
+      variant: "danger",
+    });
+    if (!ok) return;
+    await runBulkDelete(
+      { awardPeriodLabel: effectiveDeletePeriod },
+      `Cleared "${effectiveDeletePeriod}" cycle`
+    );
+  }
+
+  async function handleClearAll() {
+    if (recognitions.length === 0) return;
+    const ok = await confirm({
+      title: `Clear all ${recognitions.length} employee recognitions?`,
+      description:
+        "This removes every active and paused spotlight from the recognition wall so you can upload a fresh cycle.",
+      confirmLabel: "Clear All Spotlights",
+      variant: "danger",
+    });
+    if (!ok) return;
+    await runBulkDelete({ clearAll: true }, "Cleared all spotlights");
   }
 
   return (
@@ -373,14 +498,20 @@ export function RecognitionsTab({ data, onRefresh }: RecognitionsTabProps) {
       {/* Header Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-sm font-semibold text-zinc-950">
               Employee of the Month / Quarter / Year
             </h2>
             <Badge variant="info">{recognitions.length} Spotlights</Badge>
+            {activeRecognitionsCount > 1 && (
+              <Badge variant="secondary">
+                {Math.ceil(activeRecognitionsCount / 10)} TV Wall Slide
+                {Math.ceil(activeRecognitionsCount / 10) === 1 ? "" : "s"} (10/slide)
+              </Badge>
+            )}
           </div>
           <p className="text-xs text-zinc-500">
-            Ingest HR spreadsheets (.xlsx / .csv) with Location, Name &amp; Department — crisp vector avatars are auto-generated with zero photo management!
+            Ingest HR spreadsheets (.xlsx / .csv) with Location, Name &amp; Department — displays up to 10 winners per 5×2 TV wall slide and auto-cycles through every page!
           </p>
         </div>
 
@@ -591,21 +722,41 @@ export function RecognitionsTab({ data, onRefresh }: RecognitionsTabProps) {
                 Click any avatar below to cycle between Illustrated, Geometric, and Crown Badge styles before publishing.
               </CardDescription>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2.5">
+              {recognitions.length > 0 && (
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-950">
+                  <input
+                    type="checkbox"
+                    checked={replaceExisting}
+                    onChange={(e) => setReplaceExisting(e.target.checked)}
+                    className="size-3.5 rounded border-amber-400 accent-zinc-950"
+                  />
+                  Replace existing ({recognitions.length})
+                </label>
+              )}
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => setDrafts([])}
+                onClick={() => {
+                  setDrafts([]);
+                  setReplaceExisting(false);
+                }}
               >
                 Clear
               </Button>
               <Button
                 size="sm"
                 disabled={importing}
-                onClick={() => void publishItems(drafts)}
+                onClick={() =>
+                  void publishItems(drafts, { replaceExisting })
+                }
               >
                 <Upload className="size-3.5" />
-                {importing ? "Publishing..." : `Publish All (${drafts.length})`}
+                {importing
+                  ? "Publishing..."
+                  : replaceExisting
+                    ? `Replace & Publish (${drafts.length})`
+                    : `Publish All (${drafts.length})`}
               </Button>
             </div>
           </CardHeader>
@@ -835,103 +986,207 @@ export function RecognitionsTab({ data, onRefresh }: RecognitionsTabProps) {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {recognitions.map((r) => {
-            const avatar = generateEmployeeAvatarDataUri({
-              name: r.employeeName,
-              seed: r.avatarSeed,
-              style: r.avatarStyle,
-            });
-            const targetSummary =
-              r.targetScreenIds && r.targetScreenIds.length > 0
-                ? r.targetScreenIds
-                    .map((id) => screenById.get(id)?.name)
-                    .filter(Boolean)
-                    .slice(0, 2)
-                    .join(", ")
-                : r.targetType === "global"
-                  ? "All Displays"
-                  : r.targetType;
-            return (
-              <Card
-                key={r.id}
-                className="overflow-hidden border-zinc-200 bg-white"
+        <div className="space-y-3">
+          {/* Cycle Cleanup & Bulk Selection Toolbar */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={bulkBusy}
+                onClick={() => {
+                  if (validSelectedIds.length === recognitions.length) {
+                    setSelectedIds([]);
+                  } else {
+                    setSelectedIds(recognitions.map((r) => r.id));
+                  }
+                }}
               >
-                <div className="flex items-center gap-3.5 bg-gradient-to-r from-[#071129] to-[#0e1f4a] p-4 text-white">
-                  <div className="size-16 shrink-0 overflow-hidden rounded-full border-2 border-amber-300 shadow-md">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={avatar}
-                      alt={r.employeeName}
-                      className="h-full w-full object-cover"
+                {validSelectedIds.length === recognitions.length ? (
+                  <CheckSquare className="size-3.5 text-zinc-900" />
+                ) : (
+                  <Square className="size-3.5 text-zinc-400" />
+                )}
+                {validSelectedIds.length === recognitions.length
+                  ? "Deselect All"
+                  : `Select All (${recognitions.length})`}
+              </Button>
+              {validSelectedIds.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={bulkBusy}
+                  onClick={() => void handleBulkDeleteSelected()}
+                >
+                  <Trash2 className="size-3.5" />
+                  Delete Selected ({validSelectedIds.length})
+                </Button>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {periodCounts.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <div className="w-44">
+                    <ModernSelect
+                      size="sm"
+                      value={effectiveDeletePeriod}
+                      onValueChange={setSelectedPeriodToDelete}
+                      options={periodCounts.map((p) => ({
+                        value: p.label,
+                        label: `${p.label} (${p.count})`,
+                      }))}
                     />
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-200">
-                      <Award className="size-2.5" />
-                      Employee of the {r.awardPeriodType} • {r.awardPeriodLabel}
-                    </span>
-                    <p className="mt-1 truncate text-base font-black">
-                      {r.employeeName}
-                    </p>
-                    <p className="flex items-center gap-2 truncate text-[11px] text-slate-300">
-                      <span className="inline-flex items-center gap-1">
-                        <Building2 className="size-3 text-sky-300" />
-                        {r.departmentName}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <MapPin className="size-3 text-amber-300" />
-                        {r.locationName}
-                      </span>
-                    </p>
-                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={bulkBusy || !effectiveDeletePeriod}
+                    onClick={() => void handleDeleteByPeriod()}
+                    className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                  >
+                    <Trash2 className="size-3.5" />
+                    Delete Period
+                  </Button>
                 </div>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={bulkBusy}
+                onClick={() => void handleClearAll()}
+                className="text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+              >
+                Clear All
+              </Button>
+            </div>
+          </div>
 
-                <CardContent className="space-y-2.5 p-3.5 text-xs">
-                  {r.citation && (
-                    <p className="line-clamp-2 italic text-zinc-600">
-                      &ldquo;{r.citation}&rdquo;
-                    </p>
-                  )}
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge variant={r.isActive ? "success" : "secondary"}>
-                        {r.isActive ? "Live" : "Paused"}
-                      </Badge>
-                      <Badge variant="outline" className="text-[10px]">
-                        Every {r.injectEveryNSlides} slides • {r.durationSeconds}s
-                      </Badge>
-                      <Badge variant="info" className="text-[10px]">
-                        {targetSummary}
-                      </Badge>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {recognitions.map((r) => {
+              const avatar = generateEmployeeAvatarDataUri({
+                name: r.employeeName,
+                seed: r.avatarSeed,
+                style: r.avatarStyle,
+              });
+              const isSelected = validSelectedIds.includes(r.id);
+              const targetSummary =
+                r.targetScreenIds && r.targetScreenIds.length > 0
+                  ? r.targetScreenIds
+                      .map((id) => screenById.get(id)?.name)
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .join(", ")
+                  : r.targetType === "global"
+                    ? "All Displays"
+                    : r.targetType;
+              return (
+                <Card
+                  key={r.id}
+                  className={`overflow-hidden bg-white transition ${
+                    isSelected
+                      ? "border-zinc-950 ring-2 ring-zinc-950/15"
+                      : "border-zinc-200"
+                  }`}
+                >
+                  <div className="relative flex items-center gap-3.5 bg-gradient-to-r from-[#071129] to-[#0e1f4a] p-4 text-white">
+                    <button
+                      type="button"
+                      title={
+                        isSelected
+                          ? "Deselect spotlight"
+                          : "Select for bulk delete"
+                      }
+                      onClick={() =>
+                        setSelectedIds((prev) =>
+                          prev.includes(r.id)
+                            ? prev.filter((id) => id !== r.id)
+                            : [...prev, r.id]
+                        )
+                      }
+                      className={`absolute right-2.5 top-2.5 flex size-5 items-center justify-center rounded border transition ${
+                        isSelected
+                          ? "border-amber-300 bg-amber-400 text-zinc-950"
+                          : "border-white/30 bg-white/10 text-transparent hover:border-white/60"
+                      }`}
+                    >
+                      <Check className="size-3 stroke-[3]" />
+                    </button>
+                    <div className="size-16 shrink-0 overflow-hidden rounded-full border-2 border-amber-300 shadow-md">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={avatar}
+                        alt={r.employeeName}
+                        className="h-full w-full object-cover"
+                      />
                     </div>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        title={r.isActive ? "Pause" : "Activate"}
-                        onClick={() => void handleToggle(r)}
-                      >
-                        {r.isActive ? (
-                          <PauseCircle className="size-4 text-amber-600" />
-                        ) : (
-                          <PlayCircle className="size-4 text-emerald-600" />
-                        )}
-                      </Button>
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        title="Delete"
-                        onClick={() => void handleDelete(r)}
-                      >
-                        <Trash2 className="size-3.5 text-rose-500" />
-                      </Button>
+                    <div className="min-w-0 flex-1 pr-6">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/20 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-200">
+                        <Award className="size-2.5" />
+                        Employee of the {r.awardPeriodType} • {r.awardPeriodLabel}
+                      </span>
+                      <p className="mt-1 truncate text-base font-black">
+                        {r.employeeName}
+                      </p>
+                      <p className="flex items-center gap-2 truncate text-[11px] text-slate-300">
+                        <span className="inline-flex items-center gap-1">
+                          <Building2 className="size-3 text-sky-300" />
+                          {r.departmentName}
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                          <MapPin className="size-3 text-amber-300" />
+                          {r.locationName}
+                        </span>
+                      </p>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+
+                  <CardContent className="space-y-2.5 p-3.5 text-xs">
+                    {r.citation && (
+                      <p className="line-clamp-2 italic text-zinc-600">
+                        &ldquo;{r.citation}&rdquo;
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant={r.isActive ? "success" : "secondary"}>
+                          {r.isActive ? "Live" : "Paused"}
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px]">
+                          Every {r.injectEveryNSlides} slides • {r.durationSeconds}s
+                        </Badge>
+                        <Badge variant="info" className="text-[10px]">
+                          {targetSummary}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          title={r.isActive ? "Pause" : "Activate"}
+                          onClick={() => void handleToggle(r)}
+                        >
+                          {r.isActive ? (
+                            <PauseCircle className="size-4 text-amber-600" />
+                          ) : (
+                            <PlayCircle className="size-4 text-emerald-600" />
+                          )}
+                        </Button>
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          title="Delete"
+                          onClick={() => void handleDelete(r)}
+                        >
+                          <Trash2 className="size-3.5 text-rose-500" />
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

@@ -387,9 +387,9 @@ export function MultiZoneFrame({
           {children}
         </div>
 
-        {/* Responsive Showroom Sidebar: clamp width keeps 32" 720p & 65" 4K balanced */}
+        {/* Responsive Showroom Sidebar: sleek 21vw gives the video stage wider 16:9 proportions */}
         <aside
-          className={`flex h-full min-h-0 w-[clamp(260px,24vw,430px)] shrink-0 flex-col gap-2.5 p-3 xl:gap-3 xl:p-4 ${
+          className={`flex h-full min-h-0 w-[clamp(245px,21vw,380px)] shrink-0 flex-col gap-2.5 p-3 xl:gap-3 xl:p-3.5 ${
             sidebarSide === "left" ? "border-r" : "border-l"
           } ${theme.asideBg}`}
         >
@@ -571,7 +571,7 @@ export function MultiZoneFrame({
         partnerLogos={partnerLogos}
         partnerMode={partnerTickerMode}
         rightRailWidthClass={
-          sidebarSide === "right" ? "w-[clamp(260px,24vw,430px)]" : undefined
+          sidebarSide === "right" ? "w-[clamp(245px,21vw,380px)]" : undefined
         }
       />
     </div>

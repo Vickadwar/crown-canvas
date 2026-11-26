@@ -346,6 +346,12 @@ export const playlists = pgTable("playlists", {
   partnerTickerMode: varchar("partner_ticker_mode", { length: 16 })
     .default("pinned_right")
     .notNull(),
+  mediaFitMode: varchar("media_fit_mode", { length: 16 })
+    .default("ambient_fit")
+    .notNull(),
+  stageBackdrop: varchar("stage_backdrop", { length: 24 })
+    .default("ambient_blur")
+    .notNull(),
   defaultDurationSeconds: integer("default_duration_seconds").default(15).notNull(),
   isActive: boolean("is_active").default(true).notNull(),
   version: integer("version").default(1).notNull(),

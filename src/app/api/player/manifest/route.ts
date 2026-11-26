@@ -31,6 +31,7 @@ import {
 } from "@/db";
 import { hashDeviceToken } from "@/lib/security";
 import {
+  chunkRecognitionsIntoWallPages,
   interleavePlaybackItems,
   matchesScreenTarget,
   resolveActiveRotationStep,
@@ -80,9 +81,9 @@ export async function GET(request: Request) {
 
     const [country] = branch
       ? await db
-          .select()
-          .from(countries)
-          .where(eq(countries.id, branch.countryId))
+        .select()
+        .from(countries)
+        .where(eq(countries.id, branch.countryId))
       : [];
 
     const now = new Date();
@@ -140,15 +141,15 @@ export async function GET(request: Request) {
     // Resolve chained Playlist / Promotions / Recognitions rotation sequence if configured
     const activeRotation = matchedSchedule
       ? resolveActiveRotationStep(
-          matchedSchedule.rotationSequence,
-          now,
-          screenCtx.timezone
-        )
+        matchedSchedule.rotationSequence,
+        now,
+        screenCtx.timezone
+      )
       : null;
 
     const emergencyPlaylistId =
       matchingOverride?.overrideKind === "playlist" &&
-      matchingOverride.playlistId
+        matchingOverride.playlistId
         ? matchingOverride.playlistId
         : null;
 
@@ -165,20 +166,20 @@ export async function GET(request: Request) {
 
     const [overrideMediaAsset] =
       matchingOverride?.overrideKind === "media_asset" &&
-      matchingOverride.mediaAssetId
+        matchingOverride.mediaAssetId
         ? await db
-            .select()
-            .from(mediaAssets)
-            .where(eq(mediaAssets.id, matchingOverride.mediaAssetId))
+          .select()
+          .from(mediaAssets)
+          .where(eq(mediaAssets.id, matchingOverride.mediaAssetId))
         : [];
 
     let targetPlaylist = targetPlaylistId
       ? (
-          await db
-            .select()
-            .from(playlists)
-            .where(eq(playlists.id, targetPlaylistId))
-        )[0]
+        await db
+          .select()
+          .from(playlists)
+          .where(eq(playlists.id, targetPlaylistId))
+      )[0]
       : undefined;
 
     if (!targetPlaylist) {
@@ -192,17 +193,17 @@ export async function GET(request: Request) {
 
     const [activeLayout] = targetPlaylist?.layoutId
       ? await db
-          .select()
-          .from(layouts)
-          .where(eq(layouts.id, targetPlaylist.layoutId))
+        .select()
+        .from(layouts)
+        .where(eq(layouts.id, targetPlaylist.layoutId))
       : [];
 
     const rawItems = targetPlaylist
       ? await db
-          .select()
-          .from(playlistItems)
-          .where(eq(playlistItems.playlistId, targetPlaylist.id))
-          .orderBy(asc(playlistItems.sortOrder))
+        .select()
+        .from(playlistItems)
+        .where(eq(playlistItems.playlistId, targetPlaylist.id))
+        .orderBy(asc(playlistItems.sortOrder))
       : [];
 
     // Batched lookups (eliminates N+1 queries on playlists with many items)
@@ -229,9 +230,9 @@ export async function GET(request: Request) {
         : Promise.resolve([]),
       quickPostIds.length > 0
         ? db
-            .select()
-            .from(quickPosts)
-            .where(inArray(quickPosts.id, quickPostIds))
+          .select()
+          .from(quickPosts)
+          .where(inArray(quickPosts.id, quickPostIds))
         : Promise.resolve([]),
     ]);
 
@@ -277,9 +278,9 @@ export async function GET(request: Request) {
             : undefined;
           const mergedSlideConfig = linkedFeed?.payload
             ? {
-                ...post.slideConfig,
-                ...(linkedFeed.payload as Partial<typeof post.slideConfig>),
-              }
+              ...post.slideConfig,
+              ...(linkedFeed.payload as Partial<typeof post.slideConfig>),
+            }
             : post.slideConfig;
           resolvedItems.push({
             id: item.id,
@@ -303,9 +304,9 @@ export async function GET(request: Request) {
 
     const customTicker = targetPlaylist?.tickerText
       ? targetPlaylist.tickerText
-          .split("|")
-          .map((t) => t.trim())
-          .filter(Boolean)
+        .split("|")
+        .map((t) => t.trim())
+        .filter(Boolean)
       : [];
 
     const autoTicker = resolvedItems
@@ -318,10 +319,10 @@ export async function GET(request: Request) {
         : autoTicker.length > 0
           ? autoTicker
           : [
-              `Welcome to ${branch?.name ?? "Crown Paints"}`,
-              "Precision Tinting • 1,800+ Designer Shades",
-              "If you like it... Crown it!",
-            ];
+            `Welcome to ${branch?.name ?? "Crown Paints"}`,
+            "Precision Tinting • 1,800+ Designer Shades",
+            "If you like it... Crown it!",
+          ];
 
     // Resolve Per-Playlist Sidebar Profile, Showcase Products, Audio Tracks, Active Promotions,
     // Employee Recognitions & Official Partner Logos in parallel (additive-safe with `.catch(() => [])`)
@@ -427,28 +428,67 @@ export async function GET(request: Request) {
       };
     });
 
-    const recognitionPlaybackItems = matchedRecognitions.map((r) => {
-      const track = r.audioTrackId ? audioById.get(r.audioTrackId) : null;
-      return {
-        id: `rec-${r.id}`,
-        kind: "employee_recognition" as const,
-        recognitionId: r.id,
-        title: `${r.employeeName} — ${r.awardPeriodLabel}`,
-        employeeName: r.employeeName,
-        locationName: r.locationName,
-        departmentName: r.departmentName,
-        awardPeriodType: r.awardPeriodType,
-        awardPeriodLabel: r.awardPeriodLabel,
-        citation: r.citation,
-        avatarStyle: r.avatarStyle,
-        avatarSeed: r.avatarSeed,
-        accentColor: r.accentColor,
-        durationSeconds: Math.max(5, r.durationSeconds || 14),
-        departmentCode: "HR",
-        audioTrackUrl: track?.publicUrl ?? null,
-        audioVolumePercent: track?.volumePercent ?? null,
-      };
-    });
+    // Group multi-employee batches into paginated 10-per-slide Recognition Walls (5x2 TV grid).
+    // When only 1 employee is active, render the full-screen Hero Spotlight; when 2+ are active,
+    // render paginated Wall slides (10 per slide) cycling sequentially Page 1 -> Page N.
+    const recognitionPlaybackItems: Array<Record<string, unknown>> =
+      matchedRecognitions.length === 1
+        ? (() => {
+          const r = matchedRecognitions[0];
+          const track = r.audioTrackId ? audioById.get(r.audioTrackId) : null;
+          return [
+            {
+              id: `rec-${r.id}`,
+              kind: "employee_recognition" as const,
+              recognitionId: r.id,
+              title: `${r.employeeName} — ${r.awardPeriodLabel}`,
+              employeeName: r.employeeName,
+              locationName: r.locationName,
+              departmentName: r.departmentName,
+              awardPeriodType: r.awardPeriodType,
+              awardPeriodLabel: r.awardPeriodLabel,
+              citation: r.citation,
+              avatarStyle: r.avatarStyle,
+              avatarSeed: r.avatarSeed,
+              accentColor: r.accentColor,
+              durationSeconds: Math.max(5, r.durationSeconds || 14),
+              departmentCode: "HR",
+              audioTrackUrl: track?.publicUrl ?? null,
+              audioVolumePercent: track?.volumePercent ?? null,
+            },
+          ];
+        })()
+        : chunkRecognitionsIntoWallPages(matchedRecognitions, 10).map((wall) => {
+          const lead = wall.employees[0];
+          const leadTrack = lead?.audioTrackId
+            ? audioById.get(lead.audioTrackId)
+            : null;
+          return {
+            id: `rec-wall-${lead?.awardPeriodLabel ?? "team"}-p${wall.page}`,
+            kind: "employee_recognition_wall" as const,
+            title: `${lead?.awardPeriodLabel ?? "Employee"} Recognition (Page ${wall.page}/${wall.totalPages})`,
+            page: wall.page,
+            totalPages: wall.totalPages,
+            totalEmployees: matchedRecognitions.length,
+            awardPeriodType: lead?.awardPeriodType ?? "month",
+            awardPeriodLabel: lead?.awardPeriodLabel ?? "Spotlight",
+            employees: wall.employees.map((emp) => ({
+              id: emp.id,
+              employeeName: emp.employeeName,
+              locationName: emp.locationName,
+              departmentName: emp.departmentName,
+              awardPeriodType: emp.awardPeriodType,
+              awardPeriodLabel: emp.awardPeriodLabel,
+              citation: emp.citation,
+              avatarStyle: emp.avatarStyle,
+              avatarSeed: emp.avatarSeed,
+            })),
+            durationSeconds: Math.max(8, lead?.durationSeconds || 16),
+            departmentCode: "HR",
+            audioTrackUrl: leadTrack?.publicUrl ?? null,
+            audioVolumePercent: leadTrack?.volumePercent ?? null,
+          };
+        });
 
     // Attach optional per-slide audio to quick_post slides
     const enrichedBaseItems = resolvedItems.map((it) => {
@@ -489,20 +529,35 @@ export async function GET(request: Request) {
       const recEveryN =
         matchedRecognitions.length > 0
           ? Math.max(
-              1,
-              Math.min(
-                ...matchedRecognitions.map((r) => r.injectEveryNSlides || 6)
-              )
+            1,
+            Math.min(
+              ...matchedRecognitions.map((r) => r.injectEveryNSlides || 6)
             )
+          )
           : 0;
       const promoEveryN = targetPlaylist?.promoInjectEveryN ?? 0;
-      finalPlaybackItems = interleavePlaybackItems<Record<string, unknown>>({
+      const withPromos = interleavePlaybackItems<Record<string, unknown>>({
         baseItems: enrichedBaseItems,
         promotions: promoPlaybackItems,
         promoEveryN,
-        recognitions: recognitionPlaybackItems,
-        recognitionEveryN: recEveryN,
       });
+
+      // Inject full sequential Recognition Wall cycle (Page 1 -> Page 2 -> ... -> Page N)
+      // at the configured cadence so every batch of 10 employees finishes completely before returning!
+      if (recEveryN > 0 && recognitionPlaybackItems.length > 0) {
+        if (withPromos.length === 0) {
+          finalPlaybackItems = recognitionPlaybackItems;
+        } else {
+          const insertAfter = Math.min(recEveryN, withPromos.length);
+          finalPlaybackItems = [
+            ...withPromos.slice(0, insertAfter),
+            ...recognitionPlaybackItems,
+            ...withPromos.slice(insertAfter),
+          ];
+        }
+      } else {
+        finalPlaybackItems = withPromos;
+      }
     }
 
     const resolvedSidebarProfile =
@@ -515,12 +570,12 @@ export async function GET(request: Request) {
     const activeCatalog =
       allShowcaseProducts.length > 0
         ? allShowcaseProducts.map((p) => ({
-            id: p.id,
-            name: p.name,
-            category: p.badgeHeader,
-            tagline: p.description,
-            imageUrl: p.imageUrl,
-          }))
+          id: p.id,
+          name: p.name,
+          category: p.badgeHeader,
+          tagline: p.description,
+          imageUrl: p.imageUrl,
+        }))
         : CROWN_PRODUCT_SHOWCASE;
 
     let resolvedShowcaseProducts = activeCatalog;
@@ -578,7 +633,7 @@ export async function GET(request: Request) {
         orientation: screen.orientation,
         displayMode:
           typeof (screen.metadata as Record<string, unknown> | null)?.displayMode ===
-          "string"
+            "string"
             ? String((screen.metadata as Record<string, unknown>).displayMode)
             : screen.orientation === "portrait"
               ? "portrait_9_16"
@@ -589,37 +644,39 @@ export async function GET(request: Request) {
       },
       branch: branch
         ? {
-            id: branch.id,
-            code: branch.code,
-            name: branch.name,
-            city: branch.city,
-            openingTime: branch.openingTime,
-            closingTime: branch.closingTime,
-            operatingSchedule: branch.operatingSchedule ?? null,
-          }
+          id: branch.id,
+          code: branch.code,
+          name: branch.name,
+          city: branch.city,
+          openingTime: branch.openingTime,
+          closingTime: branch.closingTime,
+          operatingSchedule: branch.operatingSchedule ?? null,
+        }
         : null,
       country: country
         ? {
-            id: country.id,
-            code: country.code,
-            name: country.name,
-            currencyCode: country.currencyCode,
-            timezone: country.timezone,
-          }
+          id: country.id,
+          code: country.code,
+          name: country.name,
+          currencyCode: country.currencyCode,
+          timezone: country.timezone,
+        }
         : null,
       playlist: targetPlaylist
         ? {
-            id: targetPlaylist.id,
-            name: targetPlaylist.name,
-            version: targetPlaylist.version,
-            tickerText: targetPlaylist.tickerText ?? null,
-            sidebarConfig: targetPlaylist.sidebarConfig ?? null,
-            sidebarProfileId: targetPlaylist.sidebarProfileId ?? null,
-            audioTrackUrl: playlistAudio?.publicUrl ?? null,
-            audioVolumePercent: playlistAudio?.volumePercent ?? 35,
-            showPartnerLogos: targetPlaylist.showPartnerLogos !== false,
-            partnerTickerMode: targetPlaylist.partnerTickerMode || "pinned_right",
-          }
+          id: targetPlaylist.id,
+          name: targetPlaylist.name,
+          version: targetPlaylist.version,
+          tickerText: targetPlaylist.tickerText ?? null,
+          sidebarConfig: targetPlaylist.sidebarConfig ?? null,
+          sidebarProfileId: targetPlaylist.sidebarProfileId ?? null,
+          audioTrackUrl: playlistAudio?.publicUrl ?? null,
+          audioVolumePercent: playlistAudio?.volumePercent ?? 35,
+          showPartnerLogos: targetPlaylist.showPartnerLogos !== false,
+          partnerTickerMode: targetPlaylist.partnerTickerMode || "pinned_right",
+          mediaFitMode: targetPlaylist.mediaFitMode || "ambient_fit",
+          stageBackdrop: targetPlaylist.stageBackdrop || "ambient_blur",
+        }
         : null,
       partnerLogos: allPartnerLogos.map((p) => ({
         id: p.id,
@@ -629,60 +686,60 @@ export async function GET(request: Request) {
       })),
       sidebarProfile: resolvedSidebarProfile
         ? {
-            id: resolvedSidebarProfile.id,
-            name: resolvedSidebarProfile.name,
-            theme: resolvedSidebarProfile.theme,
-            displayName: resolvedSidebarProfile.displayName,
-            showClock: resolvedSidebarProfile.showClock,
-            showWeather: resolvedSidebarProfile.showWeather,
-            showQr: resolvedSidebarProfile.showQr,
-            qrTitle: resolvedSidebarProfile.qrTitle,
-            promoLabel: resolvedSidebarProfile.promoLabel,
-            qrTargetUrl: resolvedSidebarProfile.qrTargetUrl,
-            qrTrackingMode: resolvedSidebarProfile.qrTrackingMode ?? "direct",
-            qrShowLogo: resolvedSidebarProfile.qrShowLogo !== false,
-            slideIntervalSeconds: resolvedSidebarProfile.slideIntervalSeconds,
-          }
+          id: resolvedSidebarProfile.id,
+          name: resolvedSidebarProfile.name,
+          theme: resolvedSidebarProfile.theme,
+          displayName: resolvedSidebarProfile.displayName,
+          showClock: resolvedSidebarProfile.showClock,
+          showWeather: resolvedSidebarProfile.showWeather,
+          showQr: resolvedSidebarProfile.showQr,
+          qrTitle: resolvedSidebarProfile.qrTitle,
+          promoLabel: resolvedSidebarProfile.promoLabel,
+          qrTargetUrl: resolvedSidebarProfile.qrTargetUrl,
+          qrTrackingMode: resolvedSidebarProfile.qrTrackingMode ?? "direct",
+          qrShowLogo: resolvedSidebarProfile.qrShowLogo !== false,
+          slideIntervalSeconds: resolvedSidebarProfile.slideIntervalSeconds,
+        }
         : null,
       showcaseProducts: resolvedShowcaseProducts,
       qrSignatures,
       schedule: matchedSchedule
         ? {
-            id: matchedSchedule.id,
-            name: matchedSchedule.name,
-            priority: matchedSchedule.priority,
-            daypartStart: matchedSchedule.daypartStart,
-            daypartEnd: matchedSchedule.daypartEnd,
-            activeRotationLabel: activeRotation?.step.label ?? null,
-            activeRotationKind: activeRotation?.step.kind ?? null,
-          }
+          id: matchedSchedule.id,
+          name: matchedSchedule.name,
+          priority: matchedSchedule.priority,
+          daypartStart: matchedSchedule.daypartStart,
+          daypartEnd: matchedSchedule.daypartEnd,
+          activeRotationLabel: activeRotation?.step.label ?? null,
+          activeRotationKind: activeRotation?.step.kind ?? null,
+        }
         : null,
       layout: activeLayout
         ? {
-            id: activeLayout.id,
-            name: activeLayout.name,
-            zonesConfig: activeLayout.zonesConfig,
-          }
+          id: activeLayout.id,
+          name: activeLayout.name,
+          zonesConfig: activeLayout.zonesConfig,
+        }
         : null,
       tickerMessages,
       emergencyOverride: matchingOverride
         ? {
-            id: matchingOverride.id,
-            title: matchingOverride.title,
-            message: matchingOverride.message,
-            overrideKind: matchingOverride.overrideKind ?? "alert",
-            severity: matchingOverride.severity,
-            playlistId: matchingOverride.playlistId ?? null,
-            mediaAsset: overrideMediaAsset
-              ? {
-                  id: overrideMediaAsset.id,
-                  title: overrideMediaAsset.title,
-                  mediaType: overrideMediaAsset.mediaType,
-                  publicUrl: overrideMediaAsset.publicUrl,
-                  mimeType: overrideMediaAsset.mimeType,
-                }
-              : null,
-          }
+          id: matchingOverride.id,
+          title: matchingOverride.title,
+          message: matchingOverride.message,
+          overrideKind: matchingOverride.overrideKind ?? "alert",
+          severity: matchingOverride.severity,
+          playlistId: matchingOverride.playlistId ?? null,
+          mediaAsset: overrideMediaAsset
+            ? {
+              id: overrideMediaAsset.id,
+              title: overrideMediaAsset.title,
+              mediaType: overrideMediaAsset.mediaType,
+              publicUrl: overrideMediaAsset.publicUrl,
+              mimeType: overrideMediaAsset.mimeType,
+            }
+            : null,
+        }
         : null,
       items: finalPlaybackItems,
     };

@@ -3,7 +3,7 @@
  * @description Employee of the Month / Quarter / Year single & bulk Excel/CSV ingestion CRUD.
  */
 
-import { desc } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { connection } from "next/server";
 import { z } from "zod";
 import {
@@ -41,9 +41,18 @@ const singleRecognitionSchema = z.object({
 });
 
 const bulkOrSingleSchema = z.union([
-  z.object({ items: z.array(singleRecognitionSchema).min(1).max(200) }),
+  z.object({
+    items: z.array(singleRecognitionSchema).min(1).max(300),
+    replaceExisting: z.boolean().optional(),
+  }),
   singleRecognitionSchema,
 ]);
+
+const bulkDeleteSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(300).optional(),
+  awardPeriodLabel: z.string().trim().min(1).max(80).optional(),
+  clearAll: z.boolean().optional(),
+});
 
 export async function GET() {
   await connection();
@@ -84,6 +93,12 @@ export async function POST(request: Request) {
     }
 
     const list = "items" in parsed.data ? parsed.data.items : [parsed.data];
+    const replaceExisting =
+      "items" in parsed.data && parsed.data.replaceExisting === true;
+
+    if (replaceExisting) {
+      await withDbRetry(() => db.delete(employeeRecognitions));
+    }
 
     const values = list.map((item) => {
       const screenIds =
@@ -136,6 +151,87 @@ export async function POST(request: Request) {
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "Failed to save recognitions" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  const { session, errorResponse } = await requireAdminAccess({
+    disallowAuditor: true,
+  });
+  if (errorResponse) return errorResponse;
+  if (!isDatabaseConfigured()) {
+    return Response.json({ error: "Database not configured" }, { status: 503 });
+  }
+
+  try {
+    const body = await request.json();
+    const parsed = bulkDeleteSchema.safeParse(body);
+    if (
+      !parsed.success ||
+      (!parsed.data.ids &&
+        !parsed.data.awardPeriodLabel &&
+        !parsed.data.clearAll)
+    ) {
+      return Response.json(
+        { error: "Provide ids, awardPeriodLabel, or clearAll: true" },
+        { status: 400 }
+      );
+    }
+
+    let deletedRows: Array<{ id: string }> = [];
+    if (parsed.data.clearAll) {
+      deletedRows = await withDbRetry(() =>
+        db
+          .delete(employeeRecognitions)
+          .returning({ id: employeeRecognitions.id })
+      );
+    } else if (parsed.data.awardPeriodLabel) {
+      deletedRows = await withDbRetry(() =>
+        db
+          .delete(employeeRecognitions)
+          .where(
+            eq(employeeRecognitions.awardPeriodLabel, parsed.data.awardPeriodLabel!)
+          )
+          .returning({ id: employeeRecognitions.id })
+      );
+    } else if (parsed.data.ids && parsed.data.ids.length > 0) {
+      deletedRows = await withDbRetry(() =>
+        db
+          .delete(employeeRecognitions)
+          .where(inArray(employeeRecognitions.id, parsed.data.ids!))
+          .returning({ id: employeeRecognitions.id })
+      );
+    }
+
+    await Promise.all([
+      broadcastFleetSignal("manifest_refresh", {
+        reason: "recognitions_bulk_deleted",
+        deletedCount: deletedRows.length,
+      }),
+      recordAuditLog({
+        action: "recognitions.bulk_deleted",
+        entityType: "employee_recognition",
+        entityId: null,
+        userId: session.userId,
+        metadata: {
+          deletedCount: deletedRows.length,
+          awardPeriodLabel: parsed.data.awardPeriodLabel ?? null,
+          clearAll: Boolean(parsed.data.clearAll),
+        },
+      }),
+    ]);
+
+    return Response.json({ ok: true, deletedCount: deletedRows.length });
+  } catch (err) {
+    return Response.json(
+      {
+        error:
+          err instanceof Error
+            ? err.message
+            : "Failed to bulk delete recognitions",
+      },
       { status: 500 }
     );
   }
