@@ -237,17 +237,37 @@ export async function syncMediaAssetsToDisk(
   const metaById = new Map(existingMeta.map((m) => [m.assetId, m]));
   const activeAssetIds = new Set(downloadable.map((a) => a.assetId));
 
-  // Evict stale assets no longer in current manifest
-  for (const old of existingMeta) {
-    if (!activeAssetIds.has(old.assetId)) {
-      await cache.delete(buildCacheKey(old.assetId, old.sha256Checksum)).catch(() => false);
-      await deleteMeta(old.assetId);
-      metaById.delete(old.assetId);
+  // IMPORTANT: Do NOT blindly evict cached playlist videos just because the current rotation
+  // step temporarily switched to a Promotion or Employee Recognition wall! Doing so caused a
+  // ~1-minute cold re-download blackout every time playback returned from a Promo to the playlist.
+  // Instead, track total cached bytes and only evict oldest LRU non-active entries if storage
+  // space is actually needed for a new download.
+  let totalBytes = 0;
+  for (const m of existingMeta) {
+    totalBytes += Math.max(0, m.sizeBytes || 0);
+  }
+
+  async function ensureCacheSpaceFor(incomingBytes: number): Promise<boolean> {
+    if (totalBytes + incomingBytes <= maxCacheBytes) return true;
+    const evictable = Array.from(metaById.values())
+      .filter((m) => !activeAssetIds.has(m.assetId))
+      .sort((a, b) => (a.cachedAt || 0) - (b.cachedAt || 0));
+
+    for (const candidate of evictable) {
+      await cache
+        .delete(buildCacheKey(candidate.assetId, candidate.sha256Checksum))
+        .catch(() => false);
+      await deleteMeta(candidate.assetId);
+      metaById.delete(candidate.assetId);
+      totalBytes = Math.max(0, totalBytes - (candidate.sizeBytes || 0));
+      if (totalBytes + incomingBytes <= maxCacheBytes) {
+        return true;
+      }
     }
+    return totalBytes + incomingBytes <= maxCacheBytes;
   }
 
   let cachedCount = 0;
-  let totalBytes = 0;
   let lastError: string | undefined;
   let quotaExhausted = false;
 
@@ -255,7 +275,7 @@ export async function syncMediaAssetsToDisk(
     status: downloadable.length > 0 ? "downloading" : "synced",
     cachedCount: 0,
     totalCount: downloadable.length,
-    storageUsedMb: 0,
+    storageUsedMb: Math.round(totalBytes / (1024 * 1024)),
     persisted,
   });
 
@@ -266,6 +286,8 @@ export async function syncMediaAssetsToDisk(
 
     if (meta && meta.sha256Checksum !== asset.sha256Checksum) {
       await cache.delete(buildCacheKey(meta.assetId, meta.sha256Checksum)).catch(() => false);
+      totalBytes = Math.max(0, totalBytes - (meta.sizeBytes || 0));
+      metaById.delete(meta.assetId);
     }
 
     if (!existingResp) {
@@ -288,7 +310,8 @@ export async function syncMediaAssetsToDisk(
             throw new Error(`HTTP ${fetched.status} fetching media`);
           }
           const blob = await fetched.blob();
-          if (totalBytes + blob.size <= maxCacheBytes) {
+          const hasRoom = await ensureCacheSpaceFor(blob.size);
+          if (hasRoom) {
             const storedResponse = new Response(blob, {
               headers: {
                 "Content-Type": asset.mimeType || blob.type,
@@ -296,14 +319,16 @@ export async function syncMediaAssetsToDisk(
               },
             });
             await cache.put(cacheKey, storedResponse);
-            await putMeta({
+            const nextMeta: CachedAssetMeta = {
               assetId: asset.assetId,
               sha256Checksum: asset.sha256Checksum,
               publicUrl: asset.publicUrl,
               mimeType: asset.mimeType,
               sizeBytes: blob.size,
               cachedAt: Date.now(),
-            });
+            };
+            await putMeta(nextMeta);
+            metaById.set(asset.assetId, nextMeta);
             totalBytes += blob.size;
             cachedCount++;
             return true;
@@ -328,8 +353,12 @@ export async function syncMediaAssetsToDisk(
         inFlightDownloads.delete(cacheKey);
       }
     } else {
-      const sizeBytes = meta?.sizeBytes ?? (await existingResp.clone().blob()).size;
-      totalBytes += sizeBytes;
+      // Touch cachedAt so active playlist/promo assets stay hot in LRU cache
+      if (meta) {
+        const refreshed = { ...meta, cachedAt: Date.now() };
+        metaById.set(asset.assetId, refreshed);
+        void putMeta(refreshed);
+      }
       cachedCount++;
     }
 

@@ -421,6 +421,7 @@ export async function GET(request: Request) {
         mimeType: p.mimeType,
         sha256Checksum: p.sha256Checksum || p.id,
         durationSeconds: Math.max(5, p.durationSeconds || 15),
+        displayFitMode: p.displayFitMode || "auto",
         departmentCode: "PROMOTIONS",
         departmentName: p.agencyName || "Promotion",
         audioTrackUrl: track?.publicUrl ?? null,
@@ -759,9 +760,13 @@ export async function GET(request: Request) {
       });
     }
 
+    const serverBuildId =
+      process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 8) || "local-2.5";
+
     return Response.json(
       {
         ...stablePayload,
+        serverBuildId,
         generatedAt: now.toISOString(),
       },
       {

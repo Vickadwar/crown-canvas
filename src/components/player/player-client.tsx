@@ -95,6 +95,7 @@ type PlayerItem =
     mimeType: string;
     sha256Checksum: string;
     durationSeconds: number;
+    displayFitMode?: "auto" | "ambient_blur" | "edge_cover" | "showroom_light" | string;
     departmentCode: string;
     departmentName: string;
     audioTrackUrl?: string | null;
@@ -215,9 +216,11 @@ interface PlayerManifest {
     } | null;
   } | null;
   items: PlayerItem[];
+  serverBuildId?: string;
   generatedAt: string;
 }
 
+const PLAYER_BUILD_VERSION = "2.5.0-seamless";
 const STORAGE_TOKEN_KEY = "crown_canvas_device_token";
 const STORAGE_MANIFEST_KEY = "crown_canvas_last_manifest";
 const STORAGE_PENDING_PIN_KEY = "crown_canvas_pending_pin";
@@ -316,8 +319,11 @@ export function PlayerClient() {
   const [videoAspect, setVideoAspect] = useState<number>(16 / 9);
   const [stageAspect, setStageAspect] = useState<number>(1.5);
   const [ambilightActive, setAmbilightActive] = useState(false);
+  const [hydratedMediaKey, setHydratedMediaKey] = useState<string | null>(null);
+  const [imageAspects, setImageAspects] = useState<Record<string, number>>({});
 
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
+  const initialBuildIdRef = useRef<string | null>(null);
   const videoStageRef = useRef<HTMLDivElement | null>(null);
   const ambilightCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const blobUrlsRef = useRef<Map<string, string>>(new Map());
@@ -681,7 +687,7 @@ export function PlayerClient() {
             cacheStatus: syncProgress.status,
             cachedAssetCount: syncProgress.cachedCount,
             storageUsedMb: syncProgress.storageUsedMb,
-            appVersion: "2.0.0-enterprise",
+            appVersion: PLAYER_BUILD_VERSION,
             currentItemTitle: currentItemTitleRef.current,
             snapshotDataUrl,
             executedCommandIds: pendingCommandAckRef.current,
@@ -722,6 +728,20 @@ export function PlayerClient() {
 
         const data = (await res.json()) as PlayerManifest;
         safeLocalSet(STORAGE_MANIFEST_KEY, JSON.stringify(data));
+
+        // Detect newly deployed Vercel build so non-fullscreen displays automatically pull
+        // the latest player code without staying trapped on an outdated JS bundle!
+        if (data.serverBuildId) {
+          if (!initialBuildIdRef.current) {
+            initialBuildIdRef.current = data.serverBuildId;
+          } else if (
+            initialBuildIdRef.current !== data.serverBuildId &&
+            !getFullscreenElement()
+          ) {
+            window.location.reload();
+            return;
+          }
+        }
 
         if (
           data.branch?.operatingSchedule ||
@@ -1018,7 +1038,7 @@ export function PlayerClient() {
             cacheStatus: syncProgress.status,
             cachedAssetCount: syncProgress.cachedCount,
             storageUsedMb: syncProgress.storageUsedMb,
-            appVersion: "2.0.0-enterprise",
+            appVersion: PLAYER_BUILD_VERSION,
             currentItemTitle: currentItemTitleRef.current,
             executedCommandIds: pendingCommandAckRef.current,
           }),
@@ -1276,11 +1296,22 @@ export function PlayerClient() {
         }
         return safeNextMap;
       });
+      if (currentMediaKey) {
+        setHydratedMediaKey(currentMediaKey);
+      }
     }
+
+    // Safety ceiling: never wait more than 250ms for Cache Storage lookup before mounting video
+    const fallbackTimer = currentMediaKey
+      ? setTimeout(() => {
+          if (active) setHydratedMediaKey(currentMediaKey);
+        }, 250)
+      : null;
 
     void hydrateSlots();
     return () => {
       active = false;
+      if (fallbackTimer) clearTimeout(fallbackTimer);
     };
   }, [
     currentItem,
@@ -1909,6 +1940,12 @@ export function PlayerClient() {
   ) : currentItem.mediaType === "video" ? (
     (() => {
       const cachedSlotUrl = currentMediaKey ? slotUrls[currentMediaKey] : undefined;
+      // Wait up to ~40ms (250ms max ceiling) for local flash Cache Storage lookup BEFORE
+      // mounting <video> with remote R2 HTTPS so reloads & post-Promo transitions boot
+      // straight from instant local blob: cache with ZERO 1-minute network re-download!
+      const isCacheLookupReady = Boolean(
+        cachedSlotUrl || (currentMediaKey && hydratedMediaKey === currentMediaKey)
+      );
       const videoSrc = cachedSlotUrl || currentItem.publicUrl;
       const videoContentKey = `${currentItem.assetId}:${currentItem.sha256Checksum}`;
       const allowCors =
@@ -1917,7 +1954,18 @@ export function PlayerClient() {
           videoSrc,
           typeof window !== "undefined" ? window.location.origin : undefined
         );
-      const isEdgeCover = mediaFitMode === "edge_cover";
+      const itemFitOverride = currentItem.displayFitMode;
+      const isEdgeCover =
+        itemFitOverride === "edge_cover" ||
+        (itemFitOverride !== "ambient_blur" &&
+          itemFitOverride !== "showroom_light" &&
+          mediaFitMode === "edge_cover");
+      const effectiveVideoBackdrop =
+        itemFitOverride === "showroom_light"
+          ? "showroom_light"
+          : itemFitOverride === "ambient_blur"
+            ? "ambient_blur"
+            : stageBackdrop;
       const isStageWiderThanVideo = stageAspect > videoAspect;
       const isFrameReady = videoFrameReadyKey === videoContentKey;
 
@@ -1928,7 +1976,7 @@ export function PlayerClient() {
         >
           {/* Live Ambilight Video Glow Canvas (~4 fps, 48x27px): eliminates top/bottom black stripes
               while preserving 100% of corner logos (Brush & Beyond / Crown) uncropped! */}
-          {!isEdgeCover && stageBackdrop === "ambient_blur" && (
+          {!isEdgeCover && effectiveVideoBackdrop === "ambient_blur" && (
             <>
               <canvas
                 ref={ambilightCanvasRef}
@@ -1941,87 +1989,89 @@ export function PlayerClient() {
               <div className="pointer-events-none absolute inset-0 bg-white/10" />
             </>
           )}
-          {!isEdgeCover && stageBackdrop === "crown_navy" && (
+          {!isEdgeCover && effectiveVideoBackdrop === "crown_navy" && (
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),_transparent_52%),radial-gradient(circle_at_bottom,_rgba(251,191,36,0.16),_transparent_52%)]" />
           )}
 
           {/* Freeze-Frame Handoff Underlay: holds previous video's last frame while incoming video
-              decodes Frame 0 so the TV NEVER flashes a black rectangle between clips */}
-          {videoFreezeFrame && !isFrameReady && (
+              checks local disk cache & decodes Frame 0 so the TV NEVER flashes black */}
+          {videoFreezeFrame && (!isFrameReady || !isCacheLookupReady) && (
             /* eslint-disable-next-line @next/next/no-img-element */
             <img
               src={videoFreezeFrame}
               alt=""
               aria-hidden="true"
               className={`pointer-events-none absolute z-[5] ${isEdgeCover
-                  ? "inset-0 h-full w-full object-cover"
-                  : isStageWiderThanVideo
-                    ? "h-full w-auto max-w-full object-cover"
-                    : "h-auto w-full max-h-full object-cover"
+                ? "inset-0 h-full w-full object-cover"
+                : isStageWiderThanVideo
+                  ? "h-full w-auto max-w-full object-cover"
+                  : "h-auto w-full max-h-full object-cover"
                 }`}
               style={isEdgeCover ? undefined : { aspectRatio: String(videoAspect) }}
             />
           )}
 
           {/* Shrink-wrapped <video>: removes Chrome/Smart TV internal opaque black letterbox bars! */}
-          <video
-            ref={activeVideoRef}
-            key={`${videoContentKey}-${allowCors ? "cors" : "plain"}`}
-            src={videoSrc}
-            style={isEdgeCover ? undefined : { aspectRatio: String(videoAspect) }}
-            className={`relative z-10 transition-opacity duration-200 ${isFrameReady || !videoFreezeFrame ? "opacity-100" : "opacity-0"
-              } ${isEdgeCover
-                ? "h-full w-full object-cover"
-                : isStageWiderThanVideo
-                  ? "h-full w-auto max-w-full object-cover shadow-[0_18px_50px_rgba(15,23,42,0.22)]"
-                  : "h-auto w-full max-h-full object-cover shadow-[0_18px_50px_rgba(15,23,42,0.22)]"
-              }`}
-            autoPlay
-            muted={isMuted || audioBlocked}
-            playsInline
-            preload="auto"
-            crossOrigin={allowCors ? "anonymous" : undefined}
-            disablePictureInPicture
-            controlsList="nodownload nofullscreen"
-            onContextMenu={(e) => e.preventDefault()}
-            onDoubleClick={toggleFullscreen}
-            loop={activeItems.length === 1}
-            onLoadedMetadata={(e) => {
-              const v = e.currentTarget;
-              if (v.videoWidth > 0 && v.videoHeight > 0) {
-                setVideoAspect(v.videoWidth / v.videoHeight);
-              }
-            }}
-            onLoadedData={() => {
-              setVideoFrameReadyKey(videoContentKey);
-            }}
-            onPlaying={() => {
-              setVideoFrameReadyKey(videoContentKey);
-            }}
-            onStalled={(e) => {
-              if (!videoManualPaused) {
-                void e.currentTarget.play().catch(() => { });
-              }
-            }}
-            onEnded={(e) => {
-              captureVideoFreezeFrame(e.currentTarget);
-              setVideoManualPaused(false);
-              setCurrentIndex(
-                (prev) => (prev + 1) % Math.max(1, activeItems.length)
-              );
-            }}
-            onError={(e) => {
-              if (allowCors && !videoSrc.startsWith("blob:")) {
-                setCorsFallbackKey(videoContentKey);
-                return;
-              }
-              captureVideoFreezeFrame(e.currentTarget);
-              setVideoManualPaused(false);
-              setCurrentIndex(
-                (prev) => (prev + 1) % Math.max(1, activeItems.length)
-              );
-            }}
-          />
+          {isCacheLookupReady && (
+            <video
+              ref={activeVideoRef}
+              key={`${videoContentKey}-${allowCors ? "cors" : "plain"}`}
+              src={videoSrc}
+              style={isEdgeCover ? undefined : { aspectRatio: String(videoAspect) }}
+              className={`relative z-10 transition-opacity duration-200 ${isFrameReady || !videoFreezeFrame ? "opacity-100" : "opacity-0"
+                } ${isEdgeCover
+                  ? "h-full w-full object-cover"
+                  : isStageWiderThanVideo
+                    ? "h-full w-auto max-w-full object-cover shadow-[0_18px_50px_rgba(15,23,42,0.22)]"
+                    : "h-auto w-full max-h-full object-cover shadow-[0_18px_50px_rgba(15,23,42,0.22)]"
+                }`}
+              autoPlay
+              muted={isMuted || audioBlocked}
+              playsInline
+              preload="auto"
+              crossOrigin={allowCors ? "anonymous" : undefined}
+              disablePictureInPicture
+              controlsList="nodownload nofullscreen"
+              onContextMenu={(e) => e.preventDefault()}
+              onDoubleClick={toggleFullscreen}
+              loop={activeItems.length === 1}
+              onLoadedMetadata={(e) => {
+                const v = e.currentTarget;
+                if (v.videoWidth > 0 && v.videoHeight > 0) {
+                  setVideoAspect(v.videoWidth / v.videoHeight);
+                }
+              }}
+              onLoadedData={() => {
+                setVideoFrameReadyKey(videoContentKey);
+              }}
+              onPlaying={() => {
+                setVideoFrameReadyKey(videoContentKey);
+              }}
+              onStalled={(e) => {
+                if (!videoManualPaused) {
+                  void e.currentTarget.play().catch(() => { });
+                }
+              }}
+              onEnded={(e) => {
+                captureVideoFreezeFrame(e.currentTarget);
+                setVideoManualPaused(false);
+                setCurrentIndex(
+                  (prev) => (prev + 1) % Math.max(1, activeItems.length)
+                );
+              }}
+              onError={(e) => {
+                if (allowCors && !videoSrc.startsWith("blob:")) {
+                  setCorsFallbackKey(videoContentKey);
+                  return;
+                }
+                captureVideoFreezeFrame(e.currentTarget);
+                setVideoManualPaused(false);
+                setCurrentIndex(
+                  (prev) => (prev + 1) % Math.max(1, activeItems.length)
+                );
+              }}
+            />
+          )}
         </div>
       );
     })()
@@ -2031,7 +2081,11 @@ export function PlayerClient() {
       url={currentPlaybackUrl || currentItem.publicUrl}
       title={currentItem.title}
       durationSeconds={currentItem.durationSeconds}
-      stageBackdrop={stageBackdrop}
+      stageBackdrop={
+        currentItem.displayFitMode === "showroom_light"
+          ? "showroom_light"
+          : stageBackdrop
+      }
     />
   ) : currentItem.mediaType === "web_url" ? (
     <iframe
@@ -2043,45 +2097,83 @@ export function PlayerClient() {
       allowFullScreen
       referrerPolicy="no-referrer-when-downgrade"
     />
-  ) : (
-    /* Vibrant Full-Bleed A4 Poster Stage: extends poster's own bright colors edge-to-edge
-       with ZERO dark/black pillars while preserving 100% of crisp uncropped artwork! */
-    <div
-      key={currentItem.id}
-      className={`animate-crown-slide relative flex h-full w-full items-center justify-center overflow-hidden ${stageBackdropClass}`}
-    >
-      {stageBackdrop === "ambient_blur" && (
-        <>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={currentPlaybackUrl || currentItem.publicUrl}
-            alt=""
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 h-full w-full scale-125 object-cover opacity-100 blur-3xl brightness-95 saturate-125"
-          />
-          <div className="pointer-events-none absolute inset-0 bg-white/15 backdrop-blur-xl" />
-        </>
-      )}
-      {stageBackdrop === "crown_navy" && (
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(251,191,36,0.22),_transparent_52%),radial-gradient(circle_at_bottom_left,_rgba(56,189,248,0.22),_transparent_52%)]" />
-      )}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={currentPlaybackUrl || currentItem.publicUrl}
-        alt={currentItem.title}
-        className={`relative z-10 ${mediaFitMode === "edge_cover"
-          ? "h-full w-full object-cover"
-          : "h-full w-auto max-w-full object-contain ring-1 ring-white/40 shadow-[0_20px_60px_rgba(15,23,42,0.28)]"
-          }`}
-      />
-    </div>
-  );
+  ) : (() => {
+    /* Orientation-Aware Image / Promotion Stage (PNG / JPEG / WebP):
+       - Landscape images (aspect >= 1.35) display naturally full-frame with zero alteration.
+       - Portrait / A4 / Square posters (aspect < 1.35) get a bright full-bleed color-bleed
+         blur backdrop so ZERO black pillars appear while 100% of artwork stays crisp & uncropped! */
+    const imgKey = currentMediaKey || currentItem.id;
+    const imgSrc = currentPlaybackUrl || currentItem.publicUrl;
+    const detectedAspect = imageAspects[imgKey];
+    const isNaturalLandscape =
+      typeof detectedAspect === "number" && detectedAspect >= 1.35;
+    const itemFitOverride = currentItem.displayFitMode;
+    const useEdgeCover =
+      itemFitOverride === "edge_cover" ||
+      (itemFitOverride !== "ambient_blur" &&
+        itemFitOverride !== "showroom_light" &&
+        mediaFitMode === "edge_cover");
+    const effectiveImgBackdrop =
+      itemFitOverride === "showroom_light"
+        ? "showroom_light"
+        : itemFitOverride === "ambient_blur"
+          ? "ambient_blur"
+          : stageBackdrop;
+    const showVibrantBlurBackdrop =
+      !useEdgeCover &&
+      effectiveImgBackdrop === "ambient_blur" &&
+      !isNaturalLandscape;
+
+    return (
+      <div
+        key={currentItem.id}
+        className={`animate-crown-slide relative flex h-full w-full items-center justify-center overflow-hidden ${stageBackdropClass}`}
+      >
+        {showVibrantBlurBackdrop && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={imgSrc}
+              alt=""
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 h-full w-full scale-125 object-cover opacity-100 blur-3xl brightness-95 saturate-125"
+            />
+            <div className="pointer-events-none absolute inset-0 bg-white/15 backdrop-blur-xl" />
+          </>
+        )}
+        {effectiveImgBackdrop === "crown_navy" && !isNaturalLandscape && (
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(251,191,36,0.22),_transparent_52%),radial-gradient(circle_at_bottom_left,_rgba(56,189,248,0.22),_transparent_52%)]" />
+        )}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={imgSrc}
+          alt={currentItem.title}
+          onLoad={(e) => {
+            const nw = e.currentTarget.naturalWidth;
+            const nh = e.currentTarget.naturalHeight;
+            if (nw > 0 && nh > 0) {
+              const ratio = nw / nh;
+              setImageAspects((prev) =>
+                prev[imgKey] === ratio ? prev : { ...prev, [imgKey]: ratio }
+              );
+            }
+          }}
+          className={`relative z-10 ${useEdgeCover
+            ? "h-full w-full object-cover"
+            : isNaturalLandscape
+              ? "h-full w-full object-contain"
+              : "h-full w-auto max-w-full object-contain ring-1 ring-white/40 shadow-[0_20px_60px_rgba(15,23,42,0.28)]"
+            }`}
+        />
+      </div>
+    );
+  })();
 
   return (
     <div
       ref={playerContainerRef}
       style={isPairingScreen ? undefined : rotationStyle}
-      className={`relative h-screen w-screen overflow-hidden select-none ${isPairingScreen ? "bg-[#FAFAFA] text-zinc-950" : "bg-black text-white"
+      className={`relative h-screen w-screen overflow-hidden select-none ${isPairingScreen ? "bg-[#FAFAFA] text-zinc-950" : "bg-[#f4f6fa] text-white"
         } ${!isPairingScreen && cursorHidden ? "player-cursor-hidden" : ""}`}
     >
       {/* Persistent Background Music Engine (Auto-Ducks on Video/Broadcast/Standby) */}
@@ -2478,7 +2570,7 @@ export function PlayerClient() {
                 : `${manifest?.playlist?.name ? `${manifest.playlist.name} v${manifest.playlist.version} • ` : ""}${activeItems.length > 0 ? `${safeIndex + 1}/${activeItems.length} • ` : ""}${syncProgress.status === "synced"
                   ? `Cached (${syncProgress.cachedCount})`
                   : `Syncing ${syncProgress.cachedCount}/${syncProgress.totalCount}`
-                }`}
+                } • ${PLAYER_BUILD_VERSION.split("-")[0]}`}
             </span>
             <button
               type="button"

@@ -31,9 +31,11 @@ function PdfSignageViewerInner({
 }: PdfSignageViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const ambientCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [isPortraitPdf, setIsPortraitPdf] = useState(false);
   const [useIframeFallback, setUseIframeFallback] = useState(false);
 
   // Load PDF document & track total pages
@@ -148,6 +150,19 @@ function PdfSignageViewerInner({
           viewport,
         });
         await activeRenderTask.promise;
+        if (cancelled) return;
+
+        // Paint vibrant color-bleed ambient backdrop behind portrait A4 PDFs (leave landscape PDFs unaltered!)
+        const portrait = baseViewport.width / Math.max(1, baseViewport.height) < 1.25;
+        setIsPortraitPdf(portrait);
+        const ambientCanvas = ambientCanvasRef.current;
+        if (portrait && ambientCanvas && stageBackdrop === "ambient_blur") {
+          const actx = ambientCanvas.getContext("2d");
+          if (actx) {
+            actx.clearRect(0, 0, ambientCanvas.width, ambientCanvas.height);
+            actx.drawImage(canvas, 0, 0, ambientCanvas.width, ambientCanvas.height);
+          }
+        }
       } catch {
         // Ignore canceled renders during rapid transitions
       }
@@ -165,7 +180,7 @@ function PdfSignageViewerInner({
       window.removeEventListener("resize", onResize);
       activeRenderTask?.cancel?.();
     };
-  }, [currentPage, pageCount, useIframeFallback]);
+  }, [currentPage, pageCount, useIframeFallback, stageBackdrop]);
 
   if (useIframeFallback) {
     // Older Smart TV browsers (Samsung Tizen, LG webOS) often lack native inline PDF plugins
@@ -219,8 +234,24 @@ function PdfSignageViewerInner({
   return (
     <div
       ref={containerRef}
-      className={`relative flex h-full w-full items-center justify-center overflow-hidden p-4 ${backdropClass}`}
+      className={`relative flex h-full w-full items-center justify-center overflow-hidden p-3 ${backdropClass}`}
     >
+      {stageBackdrop === "ambient_blur" && (
+        <>
+          <canvas
+            ref={ambientCanvasRef}
+            width={64}
+            height={64}
+            aria-hidden="true"
+            className={`pointer-events-none absolute inset-0 h-full w-full scale-125 object-cover blur-3xl saturate-125 brightness-95 transition-opacity duration-300 ${
+              isPortraitPdf && !loading ? "opacity-100" : "opacity-0"
+            }`}
+          />
+          {isPortraitPdf && !loading && (
+            <div className="pointer-events-none absolute inset-0 bg-white/15 backdrop-blur-xl" />
+          )}
+        </>
+      )}
       {stageBackdrop === "crown_navy" && (
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(251,191,36,0.18),_transparent_52%),radial-gradient(circle_at_bottom_left,_rgba(56,189,248,0.18),_transparent_52%)]" />
       )}

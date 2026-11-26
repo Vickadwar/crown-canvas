@@ -24,6 +24,9 @@ const createPromotionSchema = z.object({
   fileSizeBytes: z.number().int().nonnegative().default(0),
   sha256Checksum: z.string().max(64).default(""),
   durationSeconds: z.number().int().min(5).max(300).default(15),
+  displayFitMode: z
+    .enum(["auto", "ambient_blur", "edge_cover", "showroom_light"])
+    .default("auto"),
   audioTrackId: z.string().uuid().nullable().optional(),
   targetType: z
     .enum(["screen", "screen_group", "branch", "country", "screen_role", "global"])
@@ -94,6 +97,7 @@ export async function POST(request: Request) {
           fileSizeBytes: parsed.data.fileSizeBytes,
           sha256Checksum: parsed.data.sha256Checksum,
           durationSeconds: parsed.data.durationSeconds,
+          displayFitMode: parsed.data.displayFitMode,
           audioTrackId: parsed.data.audioTrackId ?? null,
           targetType: screenIds ? "screen" : parsed.data.targetType,
           targetId: screenIds ? screenIds[0] : parsed.data.targetId ?? null,

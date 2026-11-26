@@ -80,6 +80,7 @@ export const promotions = pgTable("promotions", {
   fileSizeBytes: bigint("file_size_bytes", { mode: "number" }).default(0).notNull(),
   sha256Checksum: varchar("sha256_checksum", { length: 64 }).default("").notNull(),
   durationSeconds: integer("duration_seconds").default(15).notNull(),
+  displayFitMode: varchar("display_fit_mode", { length: 32 }).default("auto").notNull(),
   audioTrackId: uuid("audio_track_id").references(() => audioTracks.id, {
     onDelete: "set null",
   }),
