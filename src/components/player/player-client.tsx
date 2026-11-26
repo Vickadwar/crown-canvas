@@ -60,7 +60,10 @@ import {
   type TvDeviceProfile,
 } from "@/lib/player/tv-browser-compat";
 import { evaluateOperatingStatus } from "@/lib/screen-health";
-import { resolvePreservedSlideIndex } from "@/lib/schedule-resolver";
+import {
+  getStableSlideContentKey,
+  resolvePreservedSlideIndex,
+} from "@/lib/schedule-resolver";
 import {
   createSupabaseBrowserClient,
   isSupabaseConfigured,
@@ -308,14 +311,23 @@ export function PlayerClient() {
   const [showRemoteHint, setShowRemoteHint] = useState(false);
   const [corsFallbackKey, setCorsFallbackKey] = useState<string | null>(null);
   const [videoManualPaused, setVideoManualPaused] = useState(false);
+  const [videoFreezeFrame, setVideoFreezeFrame] = useState<string | null>(null);
+  const [videoFrameReadyKey, setVideoFrameReadyKey] = useState<string | null>(null);
+  const [videoAspect, setVideoAspect] = useState<number>(16 / 9);
+  const [stageAspect, setStageAspect] = useState<number>(1.5);
+  const [ambilightActive, setAmbilightActive] = useState(false);
 
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
+  const videoStageRef = useRef<HTMLDivElement | null>(null);
+  const ambilightCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const blobUrlsRef = useRef<Map<string, string>>(new Map());
   const pendingCommandAckRef = useRef<string[]>([]);
   const timezoneRef = useRef<string | undefined>(undefined);
   const manifestEtagRef = useRef<string | null>(null);
   const manifestRef = useRef<PlayerManifest | null>(null);
   const currentItemIdRef = useRef<string | null>(null);
+  const currentContentKeyRef = useRef<string | null>(null);
+  const currentMediaKeyRef = useRef<string | null>(null);
   const currentItemTitleRef = useRef<string | null>(null);
   const activeVideoRef = useRef<HTMLVideoElement | null>(null);
   const bgAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -819,10 +831,16 @@ export function PlayerClient() {
         );
 
         // Commit background-staged manifest cleanly AFTER caching completes, preserving the
-        // currently playing slide's position so active videos finish smoothly with zero interruption!
+        // currently playing slide's position (by exact ID OR stable content key so republishing
+        // playlist edits never unmounts or interrupts the active video!).
         if (!isUrgentStateChange) {
           setCurrentIndex((prev) =>
-            resolvePreservedSlideIndex(data.items, currentItemIdRef.current, prev)
+            resolvePreservedSlideIndex(
+              data.items,
+              currentItemIdRef.current,
+              prev,
+              currentContentKeyRef.current
+            )
           );
           setManifest(data);
         }
@@ -831,6 +849,40 @@ export function PlayerClient() {
       }
     },
     [resetLocalPairing]
+  );
+
+  // Atomic Shadow Cache Clear: keeps the currently playing video's blob: URL alive in RAM
+  // so playback continues with ZERO black screen while disk Cache Storage wipes and re-syncs
+  // silently in the background!
+  const runAtomicClearCache = useCallback(
+    async (token: string) => {
+      const activeKey = currentMediaKeyRef.current;
+      for (const [k, u] of blobUrlsRef.current.entries()) {
+        if (k !== activeKey) {
+          URL.revokeObjectURL(u);
+          blobUrlsRef.current.delete(k);
+        }
+      }
+      setSlotUrls((prev) =>
+        activeKey && prev[activeKey] ? { [activeKey]: prev[activeKey] } : {}
+      );
+      manifestEtagRef.current = null;
+      await clearPlayerMediaCache();
+      await syncManifest(token, true);
+    },
+    [syncManifest]
+  );
+
+  // Seamless Soft Reload: refreshes manifest & stages any changed assets silently in the
+  // background without calling setCurrentIndex(0) or cutting the active video to black!
+  const runSeamlessReload = useCallback(
+    async (token: string) => {
+      manifestEtagRef.current = null;
+      setStandbyBypass(false);
+      setVideoManualPaused(false);
+      await syncManifest(token, true);
+    },
+    [syncManifest]
   );
 
   useEffect(() => {
@@ -916,29 +968,15 @@ export function PlayerClient() {
               payload.command === "reload" ||
               payload.command === "restart_player"
             ) {
-              // Fullscreen-preserving Soft Reload: refreshes manifest, layout, schedules & slides
-              // in-place without calling window.location.reload() so TV stays 100% in Fullscreen!
+              // Fullscreen-preserving, zero-blackout Soft Reload
               void ackImmediately().finally(() => {
-                manifestEtagRef.current = null;
-                setCorsFallbackKey(null);
-                setStandbyBypass(false);
-                setVideoManualPaused(false);
-                setCurrentIndex(0);
-                void syncManifest(deviceToken, true);
+                void runSeamlessReload(deviceToken);
               });
             } else if (payload.command === "clear_cache") {
-              // Clears local disk cache + revokes blob URLs & re-syncs cleanly without leaving Fullscreen
-              void ackImmediately()
-                .then(async () => {
-                  for (const u of blobUrlsRef.current.values()) {
-                    URL.revokeObjectURL(u);
-                  }
-                  blobUrlsRef.current.clear();
-                  setSlotUrls({});
-                  manifestEtagRef.current = null;
-                  await clearPlayerMediaCache();
-                })
-                .then(() => syncManifest(deviceToken, true));
+              // Atomic Shadow Cache Clear: wipes & re-downloads in background with zero black screen
+              void ackImmediately().finally(() => {
+                void runAtomicClearCache(deviceToken);
+              });
             } else if (payload.command === "screenshot") {
               void ackImmediately().then(() =>
                 captureAndUploadSnapshot(deviceToken)
@@ -958,6 +996,8 @@ export function PlayerClient() {
     deviceToken,
     manifest?.screen?.id,
     syncManifest,
+    runSeamlessReload,
+    runAtomicClearCache,
     resetLocalPairing,
     captureAndUploadSnapshot,
   ]);
@@ -1002,27 +1042,14 @@ export function PlayerClient() {
             setIdentifyBanner(true);
             setTimeout(() => setIdentifyBanner(false), 10_000);
           } else if (cmd.command === "clear_cache") {
-            for (const u of blobUrlsRef.current.values()) {
-              URL.revokeObjectURL(u);
-            }
-            blobUrlsRef.current.clear();
-            setSlotUrls({});
-            manifestEtagRef.current = null;
-            await clearPlayerMediaCache();
-            await syncManifest(deviceToken, true);
+            await runAtomicClearCache(deviceToken);
           } else if (cmd.command === "screenshot") {
             await captureAndUploadSnapshot(deviceToken);
           } else if (
             cmd.command === "reload" ||
             cmd.command === "restart_player"
           ) {
-            // Fullscreen-preserving in-place soft reload (never exits TV Fullscreen)
-            manifestEtagRef.current = null;
-            setCorsFallbackKey(null);
-            setStandbyBypass(false);
-            setVideoManualPaused(false);
-            setCurrentIndex(0);
-            await syncManifest(deviceToken, true);
+            await runSeamlessReload(deviceToken);
           }
         }
       } catch {
@@ -1042,7 +1069,8 @@ export function PlayerClient() {
   }, [
     deviceToken,
     syncProgress,
-    syncManifest,
+    runAtomicClearCache,
+    runSeamlessReload,
     resetLocalPairing,
     captureAndUploadSnapshot,
   ]);
@@ -1102,11 +1130,7 @@ export function PlayerClient() {
     activeItems.length > 1 ? (safeIndex + 1) % activeItems.length : null;
   const nextItem = nextIndex !== null ? activeItems[nextIndex] : null;
 
-  useEffect(() => {
-    currentItemIdRef.current = currentItem?.id ?? null;
-    currentItemTitleRef.current = currentItem?.title ?? null;
-  }, [currentItem?.id, currentItem?.title]);
-
+  const currentContentKey = getStableSlideContentKey(currentItem);
   const currentMediaKey =
     currentItem?.kind === "media_asset"
       ? `${currentItem.assetId}:${currentItem.sha256Checksum}`
@@ -1115,6 +1139,33 @@ export function PlayerClient() {
     nextItem?.kind === "media_asset"
       ? `${nextItem.assetId}:${nextItem.sha256Checksum}`
       : null;
+
+  useEffect(() => {
+    currentItemIdRef.current = currentItem?.id ?? null;
+    currentContentKeyRef.current = currentContentKey;
+    currentMediaKeyRef.current = currentMediaKey;
+    currentItemTitleRef.current = currentItem?.title ?? null;
+  }, [currentItem?.id, currentContentKey, currentMediaKey, currentItem?.title]);
+
+  // Capture a lightweight 480x270 freeze-frame right before switching away from a video
+  // so the incoming video never flashes a dead black screen while decoding Frame 0.
+  const captureVideoFreezeFrame = useCallback(
+    (video: HTMLVideoElement | null) => {
+      if (!video || video.readyState < 2 || video.videoWidth <= 0) return;
+      try {
+        const c = document.createElement("canvas");
+        c.width = 480;
+        c.height = 270;
+        const ctx = c.getContext("2d");
+        if (!ctx) return;
+        ctx.drawImage(video, 0, 0, 480, 270);
+        setVideoFreezeFrame(c.toDataURL("image/jpeg", 0.7));
+      } catch {
+        // Ignore cross-origin tainted frames silently
+      }
+    },
+    []
+  );
 
   const currentPlaybackUrl =
     currentItem?.kind === "media_asset"
@@ -1195,15 +1246,35 @@ export function PlayerClient() {
 
       if (!active) return;
       setSlotUrls((prev) => {
+        // CRITICAL: Never swap an actively playing <video>'s src mid-playback (e.g. https -> blob:)
+        // because changing src mid-clip tears down the hardware decoder and causes a black screen.
+        // Keep whatever URL the active video is already playing on; cached blob: takes over next loop!
+        const videoEl = activeVideoRef.current;
+        const videoIsActivelyPlaying = Boolean(
+          currentMediaKey &&
+          videoEl &&
+          videoEl.readyState >= 2 &&
+          !videoEl.ended &&
+          videoEl.currentSrc
+        );
+        const safeNextMap: Record<string, string> = { ...nextMap };
+        if (videoIsActivelyPlaying && currentMediaKey) {
+          if (prev[currentMediaKey]) {
+            safeNextMap[currentMediaKey] = prev[currentMediaKey];
+          } else {
+            delete safeNextMap[currentMediaKey];
+          }
+        }
+
         const prevKeys = Object.keys(prev);
-        const nextKeys = Object.keys(nextMap);
+        const nextKeys = Object.keys(safeNextMap);
         if (
           prevKeys.length === nextKeys.length &&
-          nextKeys.every((k) => prev[k] === nextMap[k])
+          nextKeys.every((k) => prev[k] === safeNextMap[k])
         ) {
           return prev;
         }
-        return nextMap;
+        return safeNextMap;
       });
     }
 
@@ -1292,25 +1363,88 @@ export function PlayerClient() {
     return addFullscreenChangeListener(onFullscreenChange);
   }, []);
 
-  // Stable primitive keys so background manifest refreshes NEVER reset an actively playing <video>
-  const activeVideoSlideId =
+  // Stable content-based key (`assetId:sha256`) so publishing edits to an existing playlist
+  // (which regenerates `playlist_items.id` UUIDs) NEVER unmounts or blacks out a playing <video>!
+  const activeVideoContentKey =
     currentItem?.kind === "media_asset" && currentItem.mediaType === "video"
-      ? currentItem.id
+      ? `${currentItem.assetId}:${currentItem.sha256Checksum}`
       : null;
 
   // Keep mute state synced on the active <video> without tearing down its decoder
   useEffect(() => {
     const video = activeVideoRef.current;
-    if (!video || !activeVideoSlideId) return;
+    if (!video || !activeVideoContentKey) return;
     video.muted = isMuted || audioBlocked;
     video.volume = 1;
-  }, [activeVideoSlideId, isMuted, audioBlocked]);
+  }, [activeVideoContentKey, isMuted, audioBlocked]);
+
+  // Track video stage dimensions so shrink-wrapped <video> fills the exact aspect cleanly
+  // (zero Chrome/Smart TV internal black letterbox stripes!)
+  useEffect(() => {
+    const el = videoStageRef.current;
+    if (!el) return;
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setStageAspect(rect.width / rect.height);
+      }
+    };
+    measure();
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(measure);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [activeVideoContentKey]);
+
+  // Lightweight ~4 fps Live Ambilight Video Glow canvas (48x27px = negligible CPU/RAM on 100 TVs)
+  // Mirrors the live video's top & bottom colors across any letterbox band so ZERO black stripes appear!
+  const effectiveStageBackdrop = manifest?.playlist?.stageBackdrop ?? "ambient_blur";
+  const effectiveMediaFitMode = manifest?.playlist?.mediaFitMode ?? "ambient_fit";
+
+  useEffect(() => {
+    if (
+      !activeVideoContentKey ||
+      effectiveStageBackdrop !== "ambient_blur" ||
+      effectiveMediaFitMode === "edge_cover"
+    ) {
+      return;
+    }
+
+    let tainted = false;
+    const drawAmbient = () => {
+      if (tainted) return;
+      const video = activeVideoRef.current;
+      const canvas = ambilightCanvasRef.current;
+      if (!video || !canvas || video.readyState < 2 || video.videoWidth <= 0) {
+        return;
+      }
+      const ctx = canvas.getContext("2d", { willReadFrequently: false });
+      if (!ctx) return;
+      try {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        setAmbilightActive(true);
+      } catch {
+        tainted = true;
+        setAmbilightActive(false);
+      }
+    };
+
+    const timer = setInterval(drawAmbient, 260);
+    const firstTick = setTimeout(drawAmbient, 120);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(firstTick);
+    };
+  }, [activeVideoContentKey, effectiveStageBackdrop, effectiveMediaFitMode]);
 
   // Smart unmuted autoplay + low-RAM Smart TV hardware decoder cleanup keyed strictly
-  // on slide identity & playback source (never on manifest object identity!)
+  // on content identity & playback source (never on manifest object identity or row UUIDs!)
   useEffect(() => {
     const video = activeVideoRef.current;
-    if (!video || !activeVideoSlideId) {
+    if (!video || !activeVideoContentKey) {
       return;
     }
 
@@ -1343,7 +1477,7 @@ export function PlayerClient() {
     void attemptPlay();
     return () => {
       cancelled = true;
-      // Release hardware H.264/HEVC decoder ONLY when actually switching away from this video slide
+      // Release hardware H.264/HEVC decoder ONLY when actually switching to a different video clip
       try {
         video.pause();
         video.removeAttribute("src");
@@ -1353,7 +1487,7 @@ export function PlayerClient() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeVideoSlideId, currentPlaybackUrl, corsFallbackKey]);
+  }, [activeVideoContentKey, currentPlaybackUrl, corsFallbackKey]);
 
   // Ambient Background Music Engine (Cloudflare R2 MP3/AAC) with Smart Auto-Ducking:
   // Plays softly during silent images, agency Promotions, Studio slides & Employee Spotlights/Walls,
@@ -1684,15 +1818,38 @@ export function PlayerClient() {
     !activeFullscreenBroadcast &&
     !isEcoStandby;
 
-  const mediaFitMode = manifest?.playlist?.mediaFitMode ?? "ambient_fit";
-  const stageBackdrop = manifest?.playlist?.stageBackdrop ?? "ambient_blur";
+  const mediaFitMode = effectiveMediaFitMode;
+  const stageBackdrop = effectiveStageBackdrop;
   const stageBackdropClass =
-    stageBackdrop === "showroom_light"
-      ? "bg-gradient-to-br from-[#f8f6f2] via-white to-amber-50/70"
-      : "bg-[radial-gradient(ellipse_at_center,_#162a5c_0%,_#09142f_55%,_#040917_100%)]";
+    stageBackdrop === "crown_navy"
+      ? "bg-gradient-to-br from-[#16306e] via-[#0f2354] to-[#0b1940]"
+      : stageBackdrop === "showroom_light"
+        ? "bg-gradient-to-br from-[#f8f7f4] via-[#ffffff] to-amber-50/60"
+        : "bg-[#f4f6fa]";
 
-  const mainStageContent = !currentItem ? (
-    <div className="flex h-full w-full flex-col items-center justify-center bg-[#060d1f] p-12 text-center">
+  const isColdFirstBoot = Boolean(deviceToken && !demoMode && !manifest);
+
+  const mainStageContent = isColdFirstBoot ? (
+    <div className="flex h-full w-full flex-col items-center justify-center bg-gradient-to-br from-[#f8f7f4] via-white to-amber-50/50 p-12 text-center text-zinc-900">
+      <div className="mb-5 rounded-2xl border border-zinc-200 bg-white px-6 py-3 shadow-md">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={CROWN_OFFICIAL_LOGO_URL}
+          alt="Crown Paints"
+          className="h-14 w-auto object-contain"
+        />
+      </div>
+      <p className="text-xl font-bold tracking-tight text-zinc-900">
+        Preparing Display Content
+      </p>
+      <p className="mt-1.5 text-xs text-zinc-500">
+        {syncProgress.totalCount > 0
+          ? `Saving media locally (${syncProgress.cachedCount}/${syncProgress.totalCount}) for zero-lag playback...`
+          : "Connecting to Crown Canvas playlist..."}
+      </p>
+    </div>
+  ) : !currentItem ? (
+    <div className="flex h-full w-full flex-col items-center justify-center bg-gradient-to-br from-[#16306e] via-[#0f2354] to-[#0b1940] p-12 text-center text-white">
       <div className="mb-5 rounded-2xl bg-white px-6 py-3 shadow-xl">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -1704,7 +1861,7 @@ export function PlayerClient() {
       <h2 className="text-3xl font-black">
         {manifest?.screen.name || "Screen Paired"}
       </h2>
-      <p className="mt-2 text-slate-400">
+      <p className="mt-2 text-slate-300">
         Waiting for a playlist or schedule to be assigned in Crown Canvas CMS.
       </p>
     </div>
@@ -1753,29 +1910,71 @@ export function PlayerClient() {
     (() => {
       const cachedSlotUrl = currentMediaKey ? slotUrls[currentMediaKey] : undefined;
       const videoSrc = cachedSlotUrl || currentItem.publicUrl;
-      const slideKey = currentItem.id;
+      const videoContentKey = `${currentItem.assetId}:${currentItem.sha256Checksum}`;
       const allowCors =
-        corsFallbackKey !== slideKey &&
+        corsFallbackKey !== videoContentKey &&
         shouldUseVideoCrossOrigin(
           videoSrc,
           typeof window !== "undefined" ? window.location.origin : undefined
         );
       const isEdgeCover = mediaFitMode === "edge_cover";
+      const isStageWiderThanVideo = stageAspect > videoAspect;
+      const isFrameReady = videoFrameReadyKey === videoContentKey;
+
       return (
         <div
+          ref={videoStageRef}
           className={`relative flex h-full w-full items-center justify-center overflow-hidden ${stageBackdropClass}`}
         >
-          {/* Subtle ambient radial spotlight behind videos so letterbox edges glow cleanly instead of harsh dead black */}
-          {!isEdgeCover && stageBackdrop !== "showroom_light" && (
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.14),_transparent_52%),radial-gradient(circle_at_bottom,_rgba(251,191,36,0.12),_transparent_52%)]" />
+          {/* Live Ambilight Video Glow Canvas (~4 fps, 48x27px): eliminates top/bottom black stripes
+              while preserving 100% of corner logos (Brush & Beyond / Crown) uncropped! */}
+          {!isEdgeCover && stageBackdrop === "ambient_blur" && (
+            <>
+              <canvas
+                ref={ambilightCanvasRef}
+                width={48}
+                height={27}
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-0 h-full w-full scale-125 object-cover blur-3xl saturate-125 brightness-95 transition-opacity duration-500 ${ambilightActive ? "opacity-95" : "opacity-0"
+                  }`}
+              />
+              <div className="pointer-events-none absolute inset-0 bg-white/10" />
+            </>
           )}
+          {!isEdgeCover && stageBackdrop === "crown_navy" && (
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),_transparent_52%),radial-gradient(circle_at_bottom,_rgba(251,191,36,0.16),_transparent_52%)]" />
+          )}
+
+          {/* Freeze-Frame Handoff Underlay: holds previous video's last frame while incoming video
+              decodes Frame 0 so the TV NEVER flashes a black rectangle between clips */}
+          {videoFreezeFrame && !isFrameReady && (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={videoFreezeFrame}
+              alt=""
+              aria-hidden="true"
+              className={`pointer-events-none absolute z-[5] ${isEdgeCover
+                  ? "inset-0 h-full w-full object-cover"
+                  : isStageWiderThanVideo
+                    ? "h-full w-auto max-w-full object-cover"
+                    : "h-auto w-full max-h-full object-cover"
+                }`}
+              style={isEdgeCover ? undefined : { aspectRatio: String(videoAspect) }}
+            />
+          )}
+
+          {/* Shrink-wrapped <video>: removes Chrome/Smart TV internal opaque black letterbox bars! */}
           <video
             ref={activeVideoRef}
-            key={`${slideKey}-${allowCors ? "cors" : "plain"}`}
+            key={`${videoContentKey}-${allowCors ? "cors" : "plain"}`}
             src={videoSrc}
-            className={`relative z-10 h-full w-full ${isEdgeCover
-                ? "object-cover"
-                : "object-contain drop-shadow-[0_14px_40px_rgba(0,0,0,0.45)]"
+            style={isEdgeCover ? undefined : { aspectRatio: String(videoAspect) }}
+            className={`relative z-10 transition-opacity duration-200 ${isFrameReady || !videoFreezeFrame ? "opacity-100" : "opacity-0"
+              } ${isEdgeCover
+                ? "h-full w-full object-cover"
+                : isStageWiderThanVideo
+                  ? "h-full w-auto max-w-full object-cover shadow-[0_18px_50px_rgba(15,23,42,0.22)]"
+                  : "h-auto w-full max-h-full object-cover shadow-[0_18px_50px_rgba(15,23,42,0.22)]"
               }`}
             autoPlay
             muted={isMuted || audioBlocked}
@@ -1787,22 +1986,36 @@ export function PlayerClient() {
             onContextMenu={(e) => e.preventDefault()}
             onDoubleClick={toggleFullscreen}
             loop={activeItems.length === 1}
+            onLoadedMetadata={(e) => {
+              const v = e.currentTarget;
+              if (v.videoWidth > 0 && v.videoHeight > 0) {
+                setVideoAspect(v.videoWidth / v.videoHeight);
+              }
+            }}
+            onLoadedData={() => {
+              setVideoFrameReadyKey(videoContentKey);
+            }}
+            onPlaying={() => {
+              setVideoFrameReadyKey(videoContentKey);
+            }}
             onStalled={(e) => {
               if (!videoManualPaused) {
                 void e.currentTarget.play().catch(() => { });
               }
             }}
-            onEnded={() => {
+            onEnded={(e) => {
+              captureVideoFreezeFrame(e.currentTarget);
               setVideoManualPaused(false);
               setCurrentIndex(
                 (prev) => (prev + 1) % Math.max(1, activeItems.length)
               );
             }}
-            onError={() => {
+            onError={(e) => {
               if (allowCors && !videoSrc.startsWith("blob:")) {
-                setCorsFallbackKey(slideKey);
+                setCorsFallbackKey(videoContentKey);
                 return;
               }
+              captureVideoFreezeFrame(e.currentTarget);
               setVideoManualPaused(false);
               setCurrentIndex(
                 (prev) => (prev + 1) % Math.max(1, activeItems.length)
@@ -1818,6 +2031,7 @@ export function PlayerClient() {
       url={currentPlaybackUrl || currentItem.publicUrl}
       title={currentItem.title}
       durationSeconds={currentItem.durationSeconds}
+      stageBackdrop={stageBackdrop}
     />
   ) : currentItem.mediaType === "web_url" ? (
     <iframe
@@ -1830,7 +2044,8 @@ export function PlayerClient() {
       referrerPolicy="no-referrer-when-downgrade"
     />
   ) : (
-    /* Ambient Poster / A4 Stage: eliminates black pillars on portrait A4 promotions while preserving 100% of artwork */
+    /* Vibrant Full-Bleed A4 Poster Stage: extends poster's own bright colors edge-to-edge
+       with ZERO dark/black pillars while preserving 100% of crisp uncropped artwork! */
     <div
       key={currentItem.id}
       className={`animate-crown-slide relative flex h-full w-full items-center justify-center overflow-hidden ${stageBackdropClass}`}
@@ -1842,21 +2057,21 @@ export function PlayerClient() {
             src={currentPlaybackUrl || currentItem.publicUrl}
             alt=""
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 h-full w-full scale-110 object-cover opacity-75 blur-2xl brightness-50 saturate-125"
+            className="pointer-events-none absolute inset-0 h-full w-full scale-125 object-cover opacity-100 blur-3xl brightness-95 saturate-125"
           />
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/25 via-transparent to-black/35" />
+          <div className="pointer-events-none absolute inset-0 bg-white/15 backdrop-blur-xl" />
         </>
       )}
       {stageBackdrop === "crown_navy" && (
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(251,191,36,0.16),_transparent_50%),radial-gradient(circle_at_bottom_left,_rgba(56,189,248,0.16),_transparent_50%)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(251,191,36,0.22),_transparent_52%),radial-gradient(circle_at_bottom_left,_rgba(56,189,248,0.22),_transparent_52%)]" />
       )}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={currentPlaybackUrl || currentItem.publicUrl}
         alt={currentItem.title}
-        className={`relative z-10 h-full w-full ${mediaFitMode === "edge_cover"
-            ? "object-cover"
-            : "max-h-full max-w-full object-contain drop-shadow-[0_24px_55px_rgba(0,0,0,0.5)]"
+        className={`relative z-10 ${mediaFitMode === "edge_cover"
+          ? "h-full w-full object-cover"
+          : "h-full w-auto max-w-full object-contain ring-1 ring-white/40 shadow-[0_20px_60px_rgba(15,23,42,0.28)]"
           }`}
       />
     </div>
@@ -2179,7 +2394,7 @@ export function PlayerClient() {
           {mainStageContent}
         </MultiZoneFrame>
       ) : hasTickerOnlyLayout ? (
-        <div className="flex h-full w-full flex-col overflow-hidden bg-black">
+        <div className="flex h-full w-full flex-col overflow-hidden bg-[#f4f6fa]">
           <div className="relative min-h-0 flex-1 overflow-hidden">
             {mainStageContent}
           </div>

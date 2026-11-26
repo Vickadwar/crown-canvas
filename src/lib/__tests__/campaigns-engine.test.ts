@@ -9,6 +9,7 @@ import {
 import {
   buildDailyBroadcastTimeline,
   chunkRecognitionsIntoWallPages,
+  getStableSlideContentKey,
   interleavePlaybackItems,
   matchesScreenTarget,
   resolveActiveRotationStep,
@@ -235,4 +236,22 @@ test("resolvePreservedSlideIndex keeps currently playing video uninterrupted whe
 
   // Empty queue always returns 0
   assert.equal(resolvePreservedSlideIndex([], "vid-2", 2), 0);
+
+  // Publishing edits to an existing playlist regenerates playlist_items.id UUIDs;
+  // stable content key matching must still keep the actively playing video uninterrupted!
+  const republishedQueue = [
+    { id: "new-row-uuid-1", kind: "media_asset", assetId: "asset-promo", sha256Checksum: "sha-p1" },
+    { id: "new-row-uuid-2", kind: "media_asset", assetId: "asset-video-a", sha256Checksum: "sha-va" },
+    { id: "new-row-uuid-3", kind: "media_asset", assetId: "asset-video-b", sha256Checksum: "sha-vb" },
+  ];
+  const playingKey = getStableSlideContentKey({
+    id: "old-row-uuid-99",
+    kind: "media_asset",
+    assetId: "asset-video-b",
+    sha256Checksum: "sha-vb",
+  });
+  assert.equal(
+    resolvePreservedSlideIndex(republishedQueue, "old-row-uuid-99", 0, playingKey),
+    2
+  );
 });

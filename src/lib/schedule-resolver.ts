@@ -303,20 +303,60 @@ export function chunkRecognitionsIntoWallPages<T>(
   return pages;
 }
 
+export interface IdentifiablePlayerSlide {
+  id: string;
+  kind?: string;
+  assetId?: string;
+  sha256Checksum?: string;
+  quickPostId?: string;
+  page?: number;
+  employeeName?: string;
+}
+
+/**
+ * Returns a stable content identity key that survives playlist republishing (where DB
+ * `playlist_items.id` rows get fresh UUIDs) so actively playing videos never unmount or black out.
+ */
+export function getStableSlideContentKey(
+  item: IdentifiablePlayerSlide | null | undefined
+): string | null {
+  if (!item) return null;
+  if (item.kind === "media_asset" && item.assetId) {
+    return `media_asset:${item.assetId}:${item.sha256Checksum ?? ""}`;
+  }
+  if (item.kind === "quick_post" && item.quickPostId) {
+    return `quick_post:${item.quickPostId}`;
+  }
+  if (item.kind === "employee_recognition_wall") {
+    return `rec_wall:${item.page ?? 1}`;
+  }
+  if (item.kind === "employee_recognition" && item.employeeName) {
+    return `rec_single:${item.employeeName}`;
+  }
+  return item.id;
+}
+
 /**
  * Keeps the currently playing slide playing uninterrupted when a manifest refreshes in the
- * background (e.g., when a new Promotion or Employee Wall is pushed) by locating the active
- * item ID in the updated queue instead of abruptly cutting out mid-video.
+ * background (e.g., when a new Promotion, Employee Wall, or edited Playlist is published)
+ * by locating either the exact item ID or its stable content key in the updated queue.
  */
-export function resolvePreservedSlideIndex<T extends { id: string }>(
+export function resolvePreservedSlideIndex<T extends IdentifiablePlayerSlide>(
   nextItems: T[],
   activeItemId: string | null | undefined,
-  fallbackIndex: number
+  fallbackIndex: number,
+  activeContentKey?: string | null
 ): number {
   if (nextItems.length === 0) return 0;
   if (activeItemId) {
     const foundIdx = nextItems.findIndex((item) => item.id === activeItemId);
     if (foundIdx >= 0) return foundIdx;
+  }
+  if (activeContentKey) {
+    const contentIdx = nextItems.findIndex(
+      (item) => getStableSlideContentKey(item) === activeContentKey
+    );
+    if (contentIdx >= 0) return contentIdx;
   }
   return Math.max(0, fallbackIndex) % nextItems.length;
 }

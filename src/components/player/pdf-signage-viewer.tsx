@@ -16,6 +16,7 @@ interface PdfSignageViewerProps {
   url: string;
   title: string;
   durationSeconds: number;
+  stageBackdrop?: "ambient_blur" | "crown_navy" | "showroom_light" | string;
 }
 
 export function PdfSignageViewer(props: PdfSignageViewerProps) {
@@ -26,6 +27,7 @@ function PdfSignageViewerInner({
   url,
   title,
   durationSeconds,
+  stageBackdrop = "ambient_blur",
 }: PdfSignageViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -209,21 +211,29 @@ function PdfSignageViewerInner({
     );
   }
 
+  const backdropClass =
+    stageBackdrop === "crown_navy"
+      ? "bg-gradient-to-br from-[#162d66] via-[#0f2252] to-[#0a1638]"
+      : "bg-gradient-to-br from-[#f4f6fa] via-[#fafaf9] to-amber-50/60";
+
   return (
     <div
       ref={containerRef}
-      className="relative flex h-full w-full items-center justify-center overflow-hidden bg-zinc-100 p-4"
+      className={`relative flex h-full w-full items-center justify-center overflow-hidden p-4 ${backdropClass}`}
     >
+      {stageBackdrop === "crown_navy" && (
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(251,191,36,0.18),_transparent_52%),radial-gradient(circle_at_bottom_left,_rgba(56,189,248,0.18),_transparent_52%)]" />
+      )}
       {loading && (
-        <div className="flex flex-col items-center gap-2 text-zinc-500">
-          <Loader2 className="size-7 animate-spin text-zinc-700" />
+        <div className={`relative z-10 flex flex-col items-center gap-2 ${stageBackdrop === "crown_navy" ? "text-slate-200" : "text-zinc-500"}`}>
+          <Loader2 className="size-7 animate-spin" />
           <p className="text-xs font-medium">Loading PDF document...</p>
         </div>
       )}
 
       <canvas
         ref={canvasRef}
-        className={`rounded-lg bg-white shadow-[0_12px_40px_rgba(0,0,0,0.12)] transition-opacity duration-300 ${
+        className={`relative z-10 rounded-xl bg-white ring-1 ring-black/5 shadow-[0_20px_50px_rgba(15,23,42,0.18)] transition-opacity duration-300 ${
           loading ? "opacity-0" : "opacity-100"
         }`}
       />

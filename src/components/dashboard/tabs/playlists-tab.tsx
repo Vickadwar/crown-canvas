@@ -835,7 +835,7 @@ export function PlaylistsTab({
                     </div>
                     <div className="space-y-1">
                       <Label className="text-[11px] text-zinc-600">
-                        A4 Poster / Stage BG
+                        A4 Poster / Video BG
                       </Label>
                       <ModernSelect
                         size="xs"
@@ -848,9 +848,9 @@ export function PlaylistsTab({
                           )
                         }
                         options={[
-                          { value: "ambient_blur", label: "Ambient Blur (Auto)" },
-                          { value: "crown_navy", label: "Crown Navy Stage" },
-                          { value: "showroom_light", label: "Showroom Ivory Mat" },
+                          { value: "ambient_blur", label: "Live Ambilight & Blur" },
+                          { value: "showroom_light", label: "Showroom Light Gallery" },
+                          { value: "crown_navy", label: "Crown Royal Navy" },
                         ]}
                       />
                     </div>
@@ -869,7 +869,7 @@ export function PlaylistsTab({
                           )
                         }
                         options={[
-                          { value: "ambient_fit", label: "Smart Fit (No Crop)" },
+                          { value: "ambient_fit", label: "Smart Fit (Keep Logos)" },
                           { value: "edge_cover", label: "Edge-to-Edge Fill" },
                         ]}
                       />

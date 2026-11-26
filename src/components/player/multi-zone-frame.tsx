@@ -250,7 +250,7 @@ export function MultiZoneFrame({
     return (
       <div className="flex h-screen w-screen flex-col overflow-hidden bg-white text-zinc-950">
         {/* Top Primary Stage */}
-        <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
+        <div className="relative min-h-0 flex-1 overflow-hidden bg-[#f4f6fa]">
           {children}
         </div>
 
@@ -383,7 +383,7 @@ export function MultiZoneFrame({
         }`}
       >
         {/* Main Primary Stage */}
-        <div className="relative h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-black">
+        <div className="relative h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-[#f4f6fa]">
           {children}
         </div>
 
