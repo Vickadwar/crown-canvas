@@ -142,3 +142,43 @@ export const partnerLogos = pgTable("partner_logos", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+export interface NewsletterPageSlide {
+  pageNumber: number;
+  publicUrl: string;
+  storagePath: string;
+  sha256Checksum: string;
+  fileSizeBytes: number;
+  durationSeconds: number;
+  width?: number;
+  height?: number;
+}
+
+export const newsletters = pgTable("newsletters", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  title: varchar("title", { length: 180 }).notNull(),
+  issueLabel: varchar("issue_label", { length: 80 }).default("Issue 1").notNull(),
+  departmentName: varchar("department_name", { length: 120 })
+    .default("Corporate Comms")
+    .notNull(),
+  pages: jsonb("pages").$type<NewsletterPageSlide[]>().default([]).notNull(),
+  displayFitMode: varchar("display_fit_mode", { length: 32 })
+    .default("auto")
+    .notNull(),
+  injectEveryNSlides: integer("inject_every_n_slides").default(4).notNull(),
+  audioTrackId: uuid("audio_track_id").references(() => audioTracks.id, {
+    onDelete: "set null",
+  }),
+  targetType: scheduleTargetEnum("target_type").default("global").notNull(),
+  targetId: uuid("target_id"),
+  targetScreenIds: jsonb("target_screen_ids").$type<string[] | null>(),
+  targetPlaylistIds: jsonb("target_playlist_ids").$type<string[] | null>(),
+  startDate: timestamp("start_date", { withTimezone: true }),
+  endDate: timestamp("end_date", { withTimezone: true }),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdBy: uuid("created_by").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});

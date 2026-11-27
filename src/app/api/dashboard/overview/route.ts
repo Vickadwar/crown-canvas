@@ -35,6 +35,7 @@ import {
   userScopes,
   audioTracks,
   promotions,
+  newsletters,
   employeeRecognitions,
   partnerLogos,
 } from "@/db";
@@ -202,6 +203,7 @@ export async function GET() {
       appLicense,
       audioTrackRows,
       promotionRows,
+      newsletterRows,
       recognitionRows,
       partnerLogoRows,
     ] = await withDbRetry(async () => {
@@ -312,6 +314,11 @@ export async function GET() {
           .select()
           .from(promotions)
           .orderBy(desc(promotions.priority), desc(promotions.createdAt))
+          .catch(() => []),
+        db
+          .select()
+          .from(newsletters)
+          .orderBy(desc(newsletters.createdAt))
           .catch(() => []),
         db
           .select()
@@ -490,6 +497,7 @@ export async function GET() {
       studioBackgrounds: studioBackgroundRows,
       audioTracks: audioTrackRows,
       promotions: promotionRows,
+      newsletters: newsletterRows,
       employeeRecognitions: recognitionRows,
       partnerLogos: partnerLogoRows,
       roles: roleRows.map((r) => ({

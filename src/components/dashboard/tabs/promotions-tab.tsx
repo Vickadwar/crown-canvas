@@ -9,6 +9,7 @@
 
 import { useMemo, useState } from "react";
 import {
+  BookOpen,
   Calendar,
   Check,
   FileImage,
@@ -48,6 +49,7 @@ import type {
   OverviewPayload,
   PromotionItem,
 } from "../cms-types";
+import { NewslettersPanel } from "./newsletters-panel";
 
 interface PromotionsTabProps {
   data: OverviewPayload;
@@ -132,9 +134,15 @@ function getPromoStatus(p: PromotionItem): {
 
 export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
   const confirm = useConfirm();
-  const [subTab, setSubTab] = useState<"campaigns" | "audio">("campaigns");
+  const [subTab, setSubTab] = useState<"campaigns" | "newsletters" | "audio">(
+    "campaigns"
+  );
+  const [showNewsletterForm, setShowNewsletterForm] = useState(
+    (data.newsletters ?? []).length === 0
+  );
 
   const promotions = useMemo(() => data.promotions ?? [], [data.promotions]);
+  const newsletters = useMemo(() => data.newsletters ?? [], [data.newsletters]);
   const audioTracks = useMemo(() => data.audioTracks ?? [], [data.audioTracks]);
   const audioById = useMemo(
     () => new Map(audioTracks.map((a) => [a.id, a])),
@@ -504,6 +512,17 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
           </button>
           <button
             type="button"
+            onClick={() => setSubTab("newsletters")}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${subTab === "newsletters"
+                ? "bg-white text-zinc-950 shadow-2xs ring-1 ring-zinc-200/80"
+                : "text-zinc-500 hover:text-zinc-900"
+              }`}
+          >
+            <BookOpen className="size-3.5 text-emerald-600" />
+            Newsletters ({newsletters.length})
+          </button>
+          <button
+            type="button"
             onClick={() => setSubTab("audio")}
             className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${subTab === "audio"
                 ? "bg-white text-zinc-950 shadow-2xs ring-1 ring-zinc-200/80"
@@ -530,6 +549,14 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
               <Plus className="size-3.5" />
               Upload Promotion Design
             </Button>
+          ) : subTab === "newsletters" ? (
+            <Button
+              size="sm"
+              onClick={() => setShowNewsletterForm((v) => !v)}
+            >
+              <Plus className="size-3.5" />
+              Upload PDF Newsletter
+            </Button>
           ) : (
             <Button size="sm" onClick={() => setShowAudioForm((v) => !v)}>
               <Upload className="size-3.5" />
@@ -539,7 +566,15 @@ export function PromotionsTab({ data, onRefresh }: PromotionsTabProps) {
         </div>
       </div>
 
-      {subTab === "campaigns" ? (
+      {subTab === "newsletters" ? (
+        <NewslettersPanel
+          data={data}
+          onRefresh={onRefresh}
+          uploadToCloudR2={uploadToCloudR2}
+          showForm={showNewsletterForm}
+          onShowFormChange={setShowNewsletterForm}
+        />
+      ) : subTab === "campaigns" ? (
         <>
           {showPromoForm && (
             <Card className="border-amber-300 bg-white">

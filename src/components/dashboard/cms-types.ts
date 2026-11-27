@@ -261,6 +261,42 @@ export interface PromotionItem {
   createdAt?: string;
 }
 
+export interface NewsletterPageItem {
+  pageNumber: number;
+  publicUrl: string;
+  storagePath: string;
+  sha256Checksum: string;
+  fileSizeBytes: number;
+  durationSeconds: number;
+  width?: number;
+  height?: number;
+}
+
+export interface NewsletterItem {
+  id: string;
+  title: string;
+  issueLabel: string;
+  departmentName: string;
+  pages: NewsletterPageItem[];
+  displayFitMode?: "auto" | "ambient_blur" | "edge_cover" | "showroom_light" | string;
+  injectEveryNSlides: number;
+  audioTrackId: string | null;
+  targetType:
+    | "screen"
+    | "screen_group"
+    | "branch"
+    | "country"
+    | "screen_role"
+    | "global";
+  targetId: string | null;
+  targetScreenIds?: string[] | null;
+  targetPlaylistIds?: string[] | null;
+  startDate: string | null;
+  endDate: string | null;
+  isActive: boolean;
+  createdAt?: string;
+}
+
 export interface EmployeeRecognitionItem {
   id: string;
   employeeName: string;
@@ -502,6 +538,7 @@ export interface OverviewPayload {
   studioBackgrounds?: StudioBackgroundItem[];
   audioTracks?: AudioTrackItem[];
   promotions?: PromotionItem[];
+  newsletters?: NewsletterItem[];
   employeeRecognitions?: EmployeeRecognitionItem[];
   partnerLogos?: PartnerLogoItem[];
   layouts: LayoutRecord[];
