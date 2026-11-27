@@ -20,6 +20,7 @@ const patchScreenSchema = z.object({
       "ultrawide_21_9",
     ])
     .optional(),
+  overscanPercent: z.union([z.literal(0), z.literal(2), z.literal(3)]).optional(),
   name: z.string().min(2).max(150).optional(),
   isActive: z.boolean().optional(),
   screenRole: z
@@ -62,10 +63,10 @@ export async function PATCH(
       );
     }
 
-    const { displayMode, ...restFields } = parsed.data;
+    const { displayMode, overscanPercent, ...restFields } = parsed.data;
     let nextMetadata: Record<string, unknown> | undefined;
     let nextOrientation = restFields.orientation;
-    if (displayMode) {
+    if (displayMode !== undefined || overscanPercent !== undefined) {
       const [current] = await db
         .select({ metadata: screens.metadata })
         .from(screens)
@@ -73,11 +74,14 @@ export async function PATCH(
         .limit(1);
       nextMetadata = {
         ...(current?.metadata ?? {}),
-        displayMode,
+        ...(displayMode !== undefined ? { displayMode } : {}),
+        ...(overscanPercent !== undefined ? { overscanPercent } : {}),
       };
-      nextOrientation = displayMode.startsWith("portrait")
-        ? "portrait"
-        : "landscape";
+      if (displayMode) {
+        nextOrientation = displayMode.startsWith("portrait")
+          ? "portrait"
+          : "landscape";
+      }
     }
 
     const [updated] = await db

@@ -191,15 +191,15 @@ export function TickerBar({
 
   return (
     <footer
-      className={`relative flex shrink-0 items-center overflow-hidden border-t border-zinc-200 bg-white ${
+      className={`relative flex shrink-0 items-center overflow-hidden border-t border-zinc-200 bg-white antialiased ${
         compact
-          ? "h-[clamp(38px,5.2vh,54px)]"
-          : "h-[clamp(42px,5.8vh,62px)]"
+          ? "h-[clamp(36px,4.8vh,50px)]"
+          : "h-[calc(3.3*var(--u,1vw))]"
       }`}
     >
       <div
         className={`z-10 flex h-full shrink-0 items-center border-r border-zinc-200 bg-white ${
-          compact ? "px-3" : "px-[clamp(10px,1.3vw,20px)]"
+          compact ? "px-3" : "px-[calc(0.95*var(--u,1vw))]"
         }`}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -208,18 +208,18 @@ export function TickerBar({
           alt="Crown Paints"
           className={
             compact
-              ? "h-[clamp(24px,3.6vh,38px)] w-auto object-contain"
-              : "h-[clamp(26px,4.1vh,46px)] w-auto object-contain"
+              ? "h-[clamp(22px,3.3vh,36px)] w-auto object-contain"
+              : "h-[calc(2.3*var(--u,1vw))] w-auto object-contain"
           }
         />
       </div>
 
       <div className="min-w-0 flex-1 overflow-hidden">
         <div
-          className={`animate-crown-ticker items-center gap-[clamp(24px,3vw,48px)] px-[clamp(12px,1.5vw,24px)] font-semibold text-zinc-900 ${
+          className={`animate-crown-ticker items-center gap-[calc(2.4*var(--u,1vw))] px-[calc(1.1*var(--u,1vw))] font-semibold text-zinc-900 ${
             compact
               ? "text-[clamp(11px,1.35vh,13px)]"
-              : "text-[clamp(12px,1.55vh,15px)]"
+              : "text-[calc(0.88*var(--u,1vw))]"
           }`}
         >
           {[...items, ...items].map((item, i) => (
@@ -253,20 +253,20 @@ export function TickerBar({
         </div>
       </div>
 
-      {/* Pinned Compact 2-Logo Rotating Showcase Rail (Aligned flush with Right Sidebar border when present) */}
+      {/* Pinned Compact 2-Logo Rotating Showcase Rail (Aligned pixel-flush with 19% Right Sidebar border) */}
       {showPinnedPartners && (
         <div
-          className={`z-10 flex h-full shrink-0 items-center justify-center border-l border-zinc-200 bg-gradient-to-l from-zinc-50 via-white to-white ${
+          className={`z-10 flex h-full shrink-0 items-center justify-center border-l border-zinc-200 bg-white ${
             rightRailWidthClass
-              ? `${rightRailWidthClass} px-3 xl:px-4`
+              ? `${rightRailWidthClass} px-[calc(0.65*var(--u,1vw))]`
               : compact
                 ? "px-2.5"
-                : "px-3.5"
+                : "px-[calc(0.8*var(--u,1vw))]"
           }`}
         >
           <div
             key={`logo-pair-${pinnedSlice.map((p) => p.id).join("-")}`}
-            className={`animate-crown-slide flex w-full items-center justify-center gap-2 ${
+            className={`animate-crown-slide flex w-full items-center justify-center gap-[calc(0.45*var(--u,1vw))] ${
               rightRailWidthClass ? "" : "w-auto"
             }`}
           >
@@ -274,12 +274,12 @@ export function TickerBar({
               <div
                 key={partner.id}
                 title={partner.name}
-                className={`flex items-center justify-center rounded-lg border border-zinc-200/80 bg-white px-2 shadow-2xs ${
+                className={`flex items-center justify-center rounded-[calc(0.4*var(--u,1vw))] border border-zinc-200/80 bg-white px-[calc(0.35*var(--u,1vw))] ${
                   rightRailWidthClass
-                    ? "h-[clamp(28px,4.1vh,44px)] min-w-0 flex-1 max-w-[172px]"
+                    ? "h-[calc(2.35*var(--u,1vw))] min-w-0 flex-1"
                     : compact
-                      ? "h-[clamp(26px,3.6vh,36px)] w-[clamp(70px,7vw,92px)]"
-                      : "h-[clamp(28px,4.1vh,44px)] w-[clamp(78px,8vw,112px)]"
+                      ? "h-[clamp(24px,3.4vh,34px)] w-[clamp(66px,7vw,90px)]"
+                      : "h-[calc(2.35*var(--u,1vw))] w-[calc(6.4*var(--u,1vw))]"
                 }`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -288,8 +288,8 @@ export function TickerBar({
                   alt={partner.name}
                   className={
                     compact
-                      ? "h-[clamp(18px,2.5vh,26px)] w-auto max-w-[78px] object-contain"
-                      : "h-[clamp(20px,2.9vh,32px)] w-auto max-w-full object-contain"
+                      ? "h-[clamp(16px,2.3vh,24px)] w-auto max-w-[74px] object-contain"
+                      : "h-[calc(1.75*var(--u,1vw))] w-auto max-w-full object-contain"
                   }
                 />
               </div>

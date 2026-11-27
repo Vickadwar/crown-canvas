@@ -32,13 +32,15 @@ import {
 } from "@/db";
 import { hashDeviceToken } from "@/lib/security";
 import {
+  assembleAtomicPlaybackQueue,
   chunkRecognitionsIntoWallPages,
-  interleavePlaybackItems,
   matchesPromotionForScreen,
   matchesScreenTarget,
+  pairNewsletterPagesIntoSpreads,
   resolveActiveRotationStep,
   resolveActiveSchedule,
   resolveEffectivePromoCadence,
+  type AtomicBlockSchedule,
 } from "@/lib/schedule-resolver";
 import { signQrRedirect } from "@/lib/url-security";
 import {
@@ -592,14 +594,9 @@ export async function GET(request: Request) {
         targetPlaylist?.promoInjectEveryN,
         promoPlaybackItems.length > 0
       );
-      const withPromos = interleavePlaybackItems<Record<string, unknown>>({
-        baseItems: enrichedBaseItems,
-        promotions: promoPlaybackItems,
-        promoEveryN,
-      });
 
-      // Expand active, targeted Newsletters into sequential 1-page-per-slide image bursts
-      // (Page 1 -> Page 2 -> ... -> Page N) so readers see every page in exact order!
+      // Expand active, targeted Newsletters into indivisible atomic blocks so Page 1 ->
+      // Page 2 -> ... -> Page N ALWAYS plays continuously without ever being split!
       const matchedNewsletters = allNewsletters.filter((nl) =>
         matchesPromotionForScreen(
           {
@@ -619,68 +616,93 @@ export async function GET(request: Request) {
         )
       );
 
-      const newsletterSlides: Array<Record<string, unknown>> = [];
+      const newsletterBlocks: AtomicBlockSchedule<Record<string, unknown>>[] = [];
       for (const nl of matchedNewsletters) {
         const track = nl.audioTrackId ? audioById.get(nl.audioTrackId) : null;
         const sortedPages = [...(nl.pages ?? [])].sort(
           (a, b) => a.pageNumber - b.pageNumber
         );
         const total = sortedPages.length;
-        for (const page of sortedPages) {
-          newsletterSlides.push({
-            id: `nl-${nl.id}-p${page.pageNumber}`,
-            kind: "media_asset" as const,
-            assetId: `${nl.id}-p${page.pageNumber}`,
-            isPromotion: false,
-            title: `${nl.title} (${nl.issueLabel} • Page ${page.pageNumber}/${total})`,
-            mediaType: "image" as const,
-            publicUrl: page.publicUrl,
-            mimeType: "image/webp",
-            sha256Checksum: page.sha256Checksum || `${nl.id}-p${page.pageNumber}`,
-            durationSeconds: Math.max(5, page.durationSeconds || 15),
-            displayFitMode: nl.displayFitMode || "auto",
-            departmentCode: "NEWSLETTER",
-            departmentName: nl.departmentName || "Corporate Comms",
-            audioTrackUrl: track?.publicUrl ?? null,
-            audioVolumePercent: track?.volumePercent ?? null,
+        if (total === 0) continue;
+
+        const mode = nl.displayFitMode || "magazine_spread";
+        const slides: Array<Record<string, unknown>> = [];
+
+        if (mode === "magazine_spread" && total >= 2) {
+          const spreads = pairNewsletterPagesIntoSpreads(sortedPages);
+          for (const spread of spreads) {
+            const { left, right } = spread;
+            const pageLabel = right
+              ? `Pages ${left.pageNumber}–${right.pageNumber} of ${total}`
+              : `Page ${left.pageNumber} of ${total}`;
+            slides.push({
+              id: `nl-${nl.id}-s${left.pageNumber}${right ? `-${right.pageNumber}` : ""}`,
+              kind: "media_asset" as const,
+              assetId: `${nl.id}-p${left.pageNumber}`,
+              isPromotion: false,
+              title: `${nl.title} (${nl.issueLabel} • ${pageLabel})`,
+              mediaType: "image" as const,
+              publicUrl: left.publicUrl,
+              mimeType: "image/webp",
+              sha256Checksum: left.sha256Checksum || `${nl.id}-p${left.pageNumber}`,
+              secondaryAssetId: right ? `${nl.id}-p${right.pageNumber}` : null,
+              secondaryPublicUrl: right ? right.publicUrl : null,
+              secondarySha256Checksum: right
+                ? right.sha256Checksum || `${nl.id}-p${right.pageNumber}`
+                : null,
+              pageRangeLabel: pageLabel,
+              durationSeconds: spread.durationSeconds,
+              displayFitMode: "magazine_spread",
+              departmentCode: "NEWSLETTER",
+              departmentName: nl.departmentName || "Corporate Comms",
+              audioTrackUrl: track?.publicUrl ?? null,
+              audioVolumePercent: track?.volumePercent ?? null,
+            });
+          }
+        } else {
+          for (const page of sortedPages) {
+            const pageLabel = `Page ${page.pageNumber} of ${total}`;
+            slides.push({
+              id: `nl-${nl.id}-p${page.pageNumber}`,
+              kind: "media_asset" as const,
+              assetId: `${nl.id}-p${page.pageNumber}`,
+              isPromotion: false,
+              title: `${nl.title} (${nl.issueLabel} • ${pageLabel})`,
+              mediaType: "image" as const,
+              publicUrl: page.publicUrl,
+              mimeType: "image/webp",
+              sha256Checksum: page.sha256Checksum || `${nl.id}-p${page.pageNumber}`,
+              pageRangeLabel: pageLabel,
+              durationSeconds: Math.max(5, page.durationSeconds || 15),
+              displayFitMode: mode,
+              departmentCode: "NEWSLETTER",
+              departmentName: nl.departmentName || "Corporate Comms",
+              audioTrackUrl: track?.publicUrl ?? null,
+              audioVolumePercent: track?.volumePercent ?? null,
+            });
+          }
+        }
+
+        if (slides.length > 0) {
+          newsletterBlocks.push({
+            items: slides,
+            everyN: Math.max(1, nl.injectEveryNSlides || 4),
           });
         }
       }
 
-      let withNewsletters = withPromos;
-      if (newsletterSlides.length > 0) {
-        const nlEveryN = Math.max(
-          1,
-          Math.min(...matchedNewsletters.map((nl) => nl.injectEveryNSlides || 4))
-        );
-        if (withPromos.length === 0) {
-          withNewsletters = newsletterSlides;
-        } else {
-          const insertPos = Math.min(nlEveryN, withPromos.length);
-          withNewsletters = [
-            ...withPromos.slice(0, insertPos),
-            ...newsletterSlides,
-            ...withPromos.slice(insertPos),
-          ];
-        }
-      }
+      const recognitionBlocks: AtomicBlockSchedule<Record<string, unknown>>[] =
+        recEveryN > 0 && recognitionPlaybackItems.length > 0
+          ? [{ items: recognitionPlaybackItems, everyN: recEveryN }]
+          : [];
 
-      // Inject full sequential Recognition Wall cycle (Page 1 -> Page 2 -> ... -> Page N)
-      // at the configured cadence so every batch of 10 employees finishes completely before returning!
-      if (recEveryN > 0 && recognitionPlaybackItems.length > 0) {
-        if (withNewsletters.length === 0) {
-          finalPlaybackItems = recognitionPlaybackItems;
-        } else {
-          const insertAfter = Math.min(recEveryN, withNewsletters.length);
-          finalPlaybackItems = [
-            ...withNewsletters.slice(0, insertAfter),
-            ...recognitionPlaybackItems,
-            ...withNewsletters.slice(insertAfter),
-          ];
-        }
-      } else {
-        finalPlaybackItems = withNewsletters;
-      }
+      finalPlaybackItems = assembleAtomicPlaybackQueue<Record<string, unknown>>({
+        baseItems: enrichedBaseItems,
+        promotions: promoPlaybackItems,
+        promoEveryN,
+        newsletterBlocks,
+        recognitionBlocks,
+      });
     }
 
     const resolvedSidebarProfile =
@@ -761,6 +783,12 @@ export async function GET(request: Request) {
             : screen.orientation === "portrait"
               ? "portrait_9_16"
               : "landscape_16_9",
+        overscanPercent: (() => {
+          const raw = Number(
+            (screen.metadata as Record<string, unknown> | null)?.overscanPercent ?? 0
+          );
+          return raw === 2 || raw === 3 ? raw : 0;
+        })(),
         screenRole: screen.screenRole,
         hardwareType: screen.hardwareType,
         isActive: screen.isActive,

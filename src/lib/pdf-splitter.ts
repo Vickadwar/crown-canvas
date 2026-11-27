@@ -25,7 +25,8 @@ export interface PdfSplitProgress {
 
 /**
  * Splits a multi-page PDF file in the admin's browser into crisp WebP `File` slides
- * (max dimension 1920px, WebP quality 0.88 for razor-sharp readable newsletter text).
+ * (max dimension 2200px, WebP quality 0.90 for razor-sharp readable newsletter text
+ * in both 2-Page Magazine Spread and Widescreen Auto-Scroll TV modes).
  */
 export async function splitPdfIntoWebpSlides(
   pdfFile: File,
@@ -38,7 +39,7 @@ export async function splitPdfIntoWebpSlides(
 ): Promise<RenderedPdfPageDraft[]> {
   const maxPages = Math.min(40, Math.max(1, options.maxPages ?? 25));
   const defaultDuration = Math.max(5, options.defaultDurationSeconds ?? 15);
-  const maxDim = Math.max(1080, Math.min(2400, options.maxDimensionPx ?? 1920));
+  const maxDim = Math.max(1080, Math.min(2600, options.maxDimensionPx ?? 2200));
 
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
@@ -83,7 +84,7 @@ export async function splitPdfIntoWebpSlides(
       }).promise;
 
       const blob = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob((b) => resolve(b), "image/webp", 0.88)
+        canvas.toBlob((b) => resolve(b), "image/webp", 0.9)
       );
 
       if (!blob) continue;

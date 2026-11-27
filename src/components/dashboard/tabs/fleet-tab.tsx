@@ -120,6 +120,7 @@ export function FleetTab({
   const [editGroupId, setEditGroupId] = useState("");
   const [editRole, setEditRole] = useState("showroom_customer");
   const [editOrientation, setEditOrientation] = useState("landscape");
+  const [editOverscanPercent, setEditOverscanPercent] = useState<0 | 2 | 3>(0);
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Screen Groups & Bulk Actions
@@ -238,6 +239,10 @@ export function FleetTab({
           ? "portrait_9_16"
           : "landscape_16_9";
     setEditOrientation(metaMode);
+    const rawOverscan = Number(scr.metadata?.overscanPercent ?? 0);
+    setEditOverscanPercent(
+      rawOverscan === 2 || rawOverscan === 3 ? rawOverscan : 0
+    );
   }
 
   async function handleClaimPairing(e: React.FormEvent) {
@@ -292,6 +297,7 @@ export function FleetTab({
             ? "portrait"
             : "landscape",
           displayMode: editOrientation,
+          overscanPercent: editOverscanPercent,
         }),
       });
       if (!res.ok) {
@@ -1138,6 +1144,22 @@ export function FleetTab({
                     { value: "reception", label: "Reception" },
                     { value: "factory_floor", label: "Factory / Operations" },
                     { value: "back_office", label: "Back Office" },
+                  ]}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">TV Overscan Safe Margin</Label>
+                <ModernSelect
+                  size="sm"
+                  value={String(editOverscanPercent)}
+                  onValueChange={(v) => {
+                    const n = Number(v);
+                    setEditOverscanPercent(n === 2 || n === 3 ? n : 0);
+                  }}
+                  options={[
+                    { value: "0", label: "0% — Full Frame (Default)" },
+                    { value: "2", label: "2% — Subtle HDMI Safe Margin" },
+                    { value: "3", label: "3% — Deep TV Bezel Overscan" },
                   ]}
                 />
               </div>

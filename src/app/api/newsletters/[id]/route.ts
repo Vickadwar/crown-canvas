@@ -28,7 +28,14 @@ const patchNewsletterSchema = z.object({
   departmentName: z.string().trim().max(120).optional(),
   pages: z.array(pageSlideSchema).min(1).max(40).optional(),
   displayFitMode: z
-    .enum(["auto", "ambient_blur", "edge_cover", "showroom_light"])
+    .enum([
+      "magazine_spread",
+      "widescreen_pan",
+      "auto",
+      "ambient_blur",
+      "edge_cover",
+      "showroom_light",
+    ])
     .optional(),
   injectEveryNSlides: z.number().int().min(1).max(50).optional(),
   audioTrackId: z.string().uuid().nullable().optional(),

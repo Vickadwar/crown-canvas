@@ -80,6 +80,7 @@ import {
 import { PdfSignageViewer } from "./pdf-signage-viewer";
 import { QuickPostSlide } from "./quick-post-slide";
 import { TickerBar, type TickerPartnerLogo } from "./ticker-bar";
+import { WidescreenPanImage } from "./widescreen-pan-image";
 
 type PlayerItem =
   | {
@@ -94,8 +95,19 @@ type PlayerItem =
     publicUrl: string;
     mimeType: string;
     sha256Checksum: string;
+    secondaryAssetId?: string | null;
+    secondaryPublicUrl?: string | null;
+    secondarySha256Checksum?: string | null;
+    pageRangeLabel?: string | null;
     durationSeconds: number;
-    displayFitMode?: "auto" | "ambient_blur" | "edge_cover" | "showroom_light" | string;
+    displayFitMode?:
+      | "magazine_spread"
+      | "widescreen_pan"
+      | "auto"
+      | "ambient_blur"
+      | "edge_cover"
+      | "showroom_light"
+      | string;
     departmentCode: string;
     departmentName: string;
     audioTrackUrl?: string | null;
@@ -156,6 +168,7 @@ interface PlayerManifest {
     name: string;
     orientation: "landscape" | "portrait";
     displayMode?: string;
+    overscanPercent?: 0 | 2 | 3;
     screenRole: string;
     hardwareType: string;
   };
@@ -780,18 +793,27 @@ export function PlayerClient() {
           setManifest(data);
         }
 
-        const mediaRefs: ManifestAssetRef[] = data.items
-          .filter(
-            (item): item is Extract<PlayerItem, { kind: "media_asset" }> =>
-              item.kind === "media_asset"
-          )
-          .map((item) => ({
+        const mediaRefs: ManifestAssetRef[] = [];
+        for (const item of data.items) {
+          if (item.kind !== "media_asset") continue;
+          mediaRefs.push({
             assetId: item.assetId,
             sha256Checksum: item.sha256Checksum,
             publicUrl: item.publicUrl,
             mimeType: item.mimeType,
             mediaType: item.mediaType,
-          }));
+          });
+          if (item.secondaryPublicUrl && item.secondaryAssetId) {
+            mediaRefs.push({
+              assetId: item.secondaryAssetId,
+              sha256Checksum:
+                item.secondarySha256Checksum || item.secondaryAssetId,
+              publicUrl: item.secondaryPublicUrl,
+              mimeType: item.mimeType || "image/webp",
+              mediaType: "image",
+            });
+          }
+        }
 
         // Also cache Sidebar Showcase Product images, Partner Logos, Studio Slide images & Background Audio once on disk
         const extraImageUrls = new Map<string, string>();
@@ -1187,9 +1209,21 @@ export function PlayerClient() {
     currentItem?.kind === "media_asset"
       ? `${currentItem.assetId}:${currentItem.sha256Checksum}`
       : null;
+  const currentSecondaryMediaKey =
+    currentItem?.kind === "media_asset" &&
+    currentItem.secondaryAssetId &&
+    currentItem.secondaryPublicUrl
+      ? `${currentItem.secondaryAssetId}:${currentItem.secondarySha256Checksum || currentItem.secondaryAssetId}`
+      : null;
   const nextMediaKey =
     nextItem?.kind === "media_asset"
       ? `${nextItem.assetId}:${nextItem.sha256Checksum}`
+      : null;
+  const nextSecondaryMediaKey =
+    nextItem?.kind === "media_asset" &&
+    nextItem.secondaryAssetId &&
+    nextItem.secondaryPublicUrl
+      ? `${nextItem.secondaryAssetId}:${nextItem.secondarySha256Checksum || nextItem.secondaryAssetId}`
       : null;
 
   useEffect(() => {
@@ -1224,10 +1258,11 @@ export function PlayerClient() {
       ? (currentMediaKey ? slotUrls[currentMediaKey] : undefined) ||
       currentItem.publicUrl
       : null;
-  const nextPlaybackUrl =
-    nextItem?.kind === "media_asset"
-      ? (nextMediaKey ? slotUrls[nextMediaKey] : undefined) ||
-      nextItem.publicUrl
+  const currentSecondaryPlaybackUrl =
+    currentItem?.kind === "media_asset" && currentItem.secondaryPublicUrl
+      ? (currentSecondaryMediaKey
+          ? slotUrls[currentSecondaryMediaKey]
+          : undefined) || currentItem.secondaryPublicUrl
       : null;
 
   // Revoke any remaining blob: URLs on unmount
@@ -1250,34 +1285,71 @@ export function PlayerClient() {
       const keepKeys = new Set<string>();
       const targets: Array<{
         key: string;
-        item: Extract<PlayerItem, { kind: "media_asset" }>;
+        ref: ManifestAssetRef;
       }> = [];
 
+      const pushTarget = (key: string, ref: ManifestAssetRef) => {
+        if (keepKeys.has(key)) return;
+        keepKeys.add(key);
+        targets.push({ key, ref });
+      };
+
       if (currentItem?.kind === "media_asset" && currentMediaKey) {
-        keepKeys.add(currentMediaKey);
-        targets.push({ key: currentMediaKey, item: currentItem });
+        pushTarget(currentMediaKey, {
+          assetId: currentItem.assetId,
+          sha256Checksum: currentItem.sha256Checksum,
+          publicUrl: currentItem.publicUrl,
+          mimeType: currentItem.mimeType,
+          mediaType: currentItem.mediaType,
+        });
+        if (
+          currentSecondaryMediaKey &&
+          currentItem.secondaryAssetId &&
+          currentItem.secondaryPublicUrl
+        ) {
+          pushTarget(currentSecondaryMediaKey, {
+            assetId: currentItem.secondaryAssetId,
+            sha256Checksum:
+              currentItem.secondarySha256Checksum ||
+              currentItem.secondaryAssetId,
+            publicUrl: currentItem.secondaryPublicUrl,
+            mimeType: currentItem.mimeType || "image/webp",
+            mediaType: "image",
+          });
+        }
       }
       if (nextItem?.kind === "media_asset" && nextMediaKey) {
-        keepKeys.add(nextMediaKey);
-        if (nextMediaKey !== currentMediaKey) {
-          targets.push({ key: nextMediaKey, item: nextItem });
+        pushTarget(nextMediaKey, {
+          assetId: nextItem.assetId,
+          sha256Checksum: nextItem.sha256Checksum,
+          publicUrl: nextItem.publicUrl,
+          mimeType: nextItem.mimeType,
+          mediaType: nextItem.mediaType,
+        });
+        if (
+          nextSecondaryMediaKey &&
+          nextItem.secondaryAssetId &&
+          nextItem.secondaryPublicUrl
+        ) {
+          pushTarget(nextSecondaryMediaKey, {
+            assetId: nextItem.secondaryAssetId,
+            sha256Checksum:
+              nextItem.secondarySha256Checksum || nextItem.secondaryAssetId,
+            publicUrl: nextItem.secondaryPublicUrl,
+            mimeType: nextItem.mimeType || "image/webp",
+            mediaType: "image",
+          });
         }
       }
 
       const nextMap: Record<string, string> = {};
-      for (const { key, item } of targets) {
+      for (const { key, ref } of targets) {
         const existingBlob = blobUrlsRef.current.get(key);
         if (existingBlob) {
           nextMap[key] = existingBlob;
           continue;
         }
-        const res = await resolveAssetPlaybackUrl({
-          assetId: item.assetId,
-          sha256Checksum: item.sha256Checksum,
-          publicUrl: item.publicUrl,
-          mimeType: item.mimeType,
-          mediaType: item.mediaType,
-        });
+        const res = await resolveAssetPlaybackUrl(ref);
         if (!active) {
           if (res.isBlob) URL.revokeObjectURL(res.url);
           return;
@@ -1349,7 +1421,9 @@ export function PlayerClient() {
     currentItem,
     nextItem,
     currentMediaKey,
+    currentSecondaryMediaKey,
     nextMediaKey,
+    nextSecondaryMediaKey,
     syncProgress.cachedCount,
   ]);
 
@@ -1465,24 +1539,20 @@ export function PlayerClient() {
     return () => window.removeEventListener("resize", measure);
   }, [activeVideoContentKey]);
 
-  // Lightweight ~4 fps Live Ambilight Video Glow canvas (48x27px = negligible CPU/RAM on 100 TVs)
-  // Mirrors the live video's top & bottom colors across any letterbox band so ZERO black stripes appear!
+  // One-Shot Static Ambilight Color Sample (ZERO ongoing GPU-to-CPU frame readback!).
+  // Draws a single 48x27 color matte ONCE when a new video loads its first frame so
+  // hardware H.264/HEVC decoders NEVER stall or drift out of lip-sync during playback!
   const effectiveStageBackdrop = manifest?.playlist?.stageBackdrop ?? "ambient_blur";
   const effectiveMediaFitMode = manifest?.playlist?.mediaFitMode ?? "ambient_fit";
 
-  useEffect(() => {
-    if (
-      !activeVideoContentKey ||
-      effectiveStageBackdrop !== "ambient_blur" ||
-      effectiveMediaFitMode === "edge_cover"
-    ) {
-      return;
-    }
-
-    let tainted = false;
-    const drawAmbient = () => {
-      if (tainted) return;
-      const video = activeVideoRef.current;
+  const sampleStaticVideoAmbilight = useCallback(
+    (video: HTMLVideoElement | null) => {
+      if (
+        effectiveStageBackdrop !== "ambient_blur" ||
+        effectiveMediaFitMode === "edge_cover"
+      ) {
+        return;
+      }
       const canvas = ambilightCanvasRef.current;
       if (!video || !canvas || video.readyState < 2 || video.videoWidth <= 0) {
         return;
@@ -1493,22 +1563,16 @@ export function PlayerClient() {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         setAmbilightActive(true);
       } catch {
-        tainted = true;
         setAmbilightActive(false);
       }
-    };
+    },
+    [effectiveStageBackdrop, effectiveMediaFitMode]
+  );
 
-    const timer = setInterval(drawAmbient, 260);
-    const firstTick = setTimeout(drawAmbient, 120);
-    return () => {
-      clearInterval(timer);
-      clearTimeout(firstTick);
-    };
-  }, [activeVideoContentKey, effectiveStageBackdrop, effectiveMediaFitMode]);
-
-  // Smart unmuted autoplay + legacy Smart TV inline attributes on ONE persistent <video> node
-  // (reusing the same DOM node across consecutive videos prevents Smart TV browsers from
-  // flashing a native "FULLSCREEN [X]" notification banner on every playlist item change!).
+  // Buffer-Ready (`canplay`) Synced Autoplay on ONE persistent <video> node:
+  // 1. Reusing one DOM node prevents Smart TV browsers from flashing "FULLSCREEN [X]" overlays.
+  // 2. Waiting for `readyState >= 3` (`canplay`) before starting prevents Frame 0 audio jump-ahead
+  //    and subsequent "fast lips" catch-up across Windows HDMI TVs, Mini PCs & laptops.
   useEffect(() => {
     const video = activeVideoRef.current;
     if (!video || !activeVideoContentKey) {
@@ -1516,6 +1580,8 @@ export function PlayerClient() {
     }
 
     let cancelled = false;
+    let playStarted = false;
+
     // Enforce strict inline playback across Tizen, webOS, Android TV WebView & Silk browsers
     video.setAttribute("webkit-playsinline", "true");
     video.setAttribute("x5-playsinline", "true");
@@ -1524,6 +1590,8 @@ export function PlayerClient() {
     video.muted = isMuted;
 
     const attemptPlay = async () => {
+      if (cancelled || playStarted) return;
+      playStarted = true;
       try {
         await video.play();
         if (!cancelled && !isMuted) {
@@ -1532,7 +1600,10 @@ export function PlayerClient() {
       } catch (err) {
         if (cancelled) return;
         const errName = err instanceof DOMException ? err.name : "";
-        if (errName === "AbortError") return;
+        if (errName === "AbortError") {
+          playStarted = false;
+          return;
+        }
         if (!isMuted && errName === "NotAllowedError") {
           video.muted = true;
           setAudioBlocked(true);
@@ -1545,9 +1616,24 @@ export function PlayerClient() {
       }
     };
 
-    void attemptPlay();
+    const onCanPlayReady = () => {
+      void attemptPlay();
+    };
+
+    let safetyTimer: ReturnType<typeof setTimeout> | null = null;
+    if (video.readyState >= 3) {
+      void attemptPlay();
+    } else {
+      video.addEventListener("canplay", onCanPlayReady, { once: true });
+      safetyTimer = setTimeout(() => {
+        void attemptPlay();
+      }, 1200);
+    }
+
     return () => {
       cancelled = true;
+      if (safetyTimer) clearTimeout(safetyTimer);
+      video.removeEventListener("canplay", onCanPlayReady);
       try {
         video.pause();
       } catch {
@@ -1842,10 +1928,6 @@ export function PlayerClient() {
   const slideDurationSec = Math.max(5, currentItem?.durationSeconds || 15);
   const isVideoSlide =
     currentItem?.kind === "media_asset" && currentItem.mediaType === "video";
-  const nextIsVideo =
-    nextItem?.kind === "media_asset" &&
-    nextItem.mediaType === "video" &&
-    Boolean(nextPlaybackUrl);
 
   const zones = manifest?.layout?.zonesConfig ?? [];
   const sidebarZone = zones.find(
@@ -1898,11 +1980,6 @@ export function PlayerClient() {
     isStandby &&
     !standbyBypass &&
     Boolean(manifest?.branch);
-  const isNormalPlayback =
-    !isPairingScreen &&
-    !isScreenPaused &&
-    !activeFullscreenBroadcast &&
-    !isEcoStandby;
 
   const mediaFitMode = effectiveMediaFitMode;
   const stageBackdrop = effectiveStageBackdrop;
@@ -2098,16 +2175,17 @@ export function PlayerClient() {
                   setVideoAspect(v.videoWidth / v.videoHeight);
                 }
               }}
-              onLoadedData={() => {
+              onLoadedData={(e) => {
                 setVideoFrameReadyKey(videoContentKey);
+                sampleStaticVideoAmbilight(e.currentTarget);
+              }}
+              onCanPlay={(e) => {
+                if (!videoManualPaused && e.currentTarget.paused) {
+                  void e.currentTarget.play().catch(() => { });
+                }
               }}
               onPlaying={() => {
                 setVideoFrameReadyKey(videoContentKey);
-              }}
-              onStalled={(e) => {
-                if (!videoManualPaused) {
-                  void e.currentTarget.play().catch(() => { });
-                }
               }}
               onEnded={(e) => {
                 captureVideoFreezeFrame(e.currentTarget);
@@ -2155,20 +2233,76 @@ export function PlayerClient() {
       referrerPolicy="no-referrer-when-downgrade"
     />
   ) : (() => {
-    /* Orientation-Aware Image / Promotion Stage (PNG / JPEG / WebP):
-       - Landscape images (aspect >= 1.35) display naturally full-frame with zero alteration.
-       - Portrait / A4 / Square posters (aspect < 1.35) get a bright full-bleed color-bleed
-         blur backdrop so ZERO black pillars appear while 100% of artwork stays crisp & uncropped! */
+    /* Orientation-Aware Image / Promotion / Multi-Page Newsletter Stage:
+       - `magazine_spread` (2-page side-by-side editorial spread): ~95% width fill, zero cropping!
+       - `widescreen_pan` (zoomed 88% width slow vertical GPU glide): 2x larger readable text!
+       - Landscape images (aspect >= 1.35): display naturally full-frame with zero alteration.
+       - Portrait / A4 / Square posters (aspect < 1.35): bright color-bleed blur or clean gallery matte. */
     const imgKey = currentMediaKey || currentItem.id;
     const imgSrc = currentPlaybackUrl || currentItem.publicUrl;
+    const itemFitOverride = currentItem.displayFitMode;
+
+    // 1. Wide 2-Page Magazine Spread (e.g. Pages 1–2 side-by-side)
+    if (
+      itemFitOverride === "magazine_spread" &&
+      currentSecondaryPlaybackUrl
+    ) {
+      return (
+        <div
+          key={currentItem.id}
+          className="animate-crown-slide relative flex h-full w-full items-center justify-center overflow-hidden bg-[#eef1f6] p-[calc(0.85*var(--u,1vw))]"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={imgSrc}
+            alt=""
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 h-full w-full scale-110 object-cover opacity-30 blur-2xl"
+          />
+          <div className="relative z-10 flex h-full w-full items-center justify-center gap-[calc(0.75*var(--u,1vw))]">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={imgSrc}
+              alt={`${currentItem.title} — Left Page`}
+              className="h-full max-h-full max-w-[49%] w-auto rounded-[calc(0.35*var(--u,1vw))] bg-white object-contain ring-1 ring-zinc-300/80 shadow-[0_12px_32px_rgba(15,23,42,0.16)]"
+            />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={currentSecondaryPlaybackUrl}
+              alt={`${currentItem.title} — Right Page`}
+              className="h-full max-h-full max-w-[49%] w-auto rounded-[calc(0.35*var(--u,1vw))] bg-white object-contain ring-1 ring-zinc-300/80 shadow-[0_12px_32px_rgba(15,23,42,0.16)]"
+            />
+          </div>
+          {currentItem.pageRangeLabel && (
+            <span className="pointer-events-none absolute bottom-[calc(0.7*var(--u,1vw))] right-[calc(0.9*var(--u,1vw))] z-20 rounded-full bg-zinc-950/75 px-[calc(0.65*var(--u,1vw))] py-[calc(0.22*var(--u,1vw))] text-[calc(0.62*var(--u,1vw))] font-semibold tracking-wide text-white">
+              {currentItem.pageRangeLabel}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    // 2. Widescreen Auto-Scroll (Zoomed 88% width with smooth top-to-bottom GPU glide)
+    if (itemFitOverride === "widescreen_pan") {
+      return (
+        <WidescreenPanImage
+          key={currentItem.id}
+          src={imgSrc}
+          alt={currentItem.title}
+          durationSeconds={currentItem.durationSeconds}
+          pageRangeLabel={currentItem.pageRangeLabel}
+        />
+      );
+    }
+
     const detectedAspect = imageAspects[imgKey];
     const isNaturalLandscape =
       typeof detectedAspect === "number" && detectedAspect >= 1.35;
-    const itemFitOverride = currentItem.displayFitMode;
     const useEdgeCover =
       itemFitOverride === "edge_cover" ||
       (itemFitOverride !== "ambient_blur" &&
         itemFitOverride !== "showroom_light" &&
+        itemFitOverride !== "magazine_spread" &&
         mediaFitMode === "edge_cover");
     const effectiveImgBackdrop =
       itemFitOverride === "showroom_light"
@@ -2228,6 +2362,11 @@ export function PlayerClient() {
               : "h-full w-auto max-w-full object-contain ring-1 ring-white/40 shadow-[0_20px_60px_rgba(15,23,42,0.28)]"
             }`}
         />
+        {currentItem.pageRangeLabel && (
+          <span className="pointer-events-none absolute bottom-[calc(0.7*var(--u,1vw))] right-[calc(0.9*var(--u,1vw))] z-20 rounded-full bg-zinc-950/75 px-[calc(0.65*var(--u,1vw))] py-[calc(0.22*var(--u,1vw))] text-[calc(0.62*var(--u,1vw))] font-semibold tracking-wide text-white">
+            {currentItem.pageRangeLabel}
+          </span>
+        )}
       </div>
     );
   })();
@@ -2248,25 +2387,10 @@ export function PlayerClient() {
         aria-hidden="true"
       />
 
-      {/* Dual-Buffer Next-Video Preloader (Mini PCs / Desktops only — disabled on Smart TVs to protect single hardware H.264 decoder) */}
-      {isNormalPlayback &&
-        !tvProfile.singleVideoDecoder &&
-        nextIsVideo &&
-        nextPlaybackUrl && (
-          <video
-            key={`preload-${nextItem.id}`}
-            src={nextPlaybackUrl}
-            preload="auto"
-            muted
-            playsInline
-            aria-hidden="true"
-            className="pointer-events-none absolute -z-10 size-1 opacity-0"
-          />
-        )}
-
       {/* Single Eternal Fullscreen Stage: Pairing Code, Paused, Emergency Broadcast, Eco-Standby,
           and Normal Playback ALL render INSIDE playerContainerRef so Delete/Unpair, Reload,
-          Clear Cache, Playlist Rotation, Employee Spotlights & Broadcasts NEVER exit Fullscreen! */}
+          Clear Cache, Playlist Rotation, Employee Spotlights & Broadcasts NEVER exit Fullscreen!
+          Only ONE hardware <video> decoder ever exists at a time (no hidden dual preloader). */}
       {isPairingScreen ? (
         <div className="studio-dot-grid animate-crown-slide relative flex h-full w-full flex-col items-center justify-between overflow-y-auto bg-[#FAFAFA] p-6 text-zinc-950 md:p-12">
           {/* Top Minimalist Header */}
@@ -2546,12 +2670,22 @@ export function PlayerClient() {
             manifest?.playlist?.partnerTickerMode ?? "pinned_right"
           }
           isTvBrowser={tvProfile.isTvBrowser}
+          overscanPercent={manifest?.screen?.overscanPercent ?? 0}
         >
           {mainStageContent}
         </MultiZoneFrame>
       ) : hasTickerOnlyLayout ? (
-        <div className="flex h-full w-full flex-col overflow-hidden bg-[#f4f6fa]">
-          <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div
+          style={{ "--u": "min(1vw, 1.7778vh)" } as React.CSSProperties}
+          className={`flex h-full w-full flex-col overflow-hidden ${
+            manifest?.screen?.overscanPercent === 3
+              ? "bg-black p-[3%]"
+              : manifest?.screen?.overscanPercent === 2
+                ? "bg-black p-[2%]"
+                : "bg-[#f4f6fa]"
+          }`}
+        >
+          <div className="relative min-h-0 flex-1 overflow-hidden bg-[#f4f6fa]">
             {mainStageContent}
           </div>
           <TickerBar
@@ -2567,7 +2701,18 @@ export function PlayerClient() {
           />
         </div>
       ) : (
-        mainStageContent
+        <div
+          style={{ "--u": "min(1vw, 1.7778vh)" } as React.CSSProperties}
+          className={`h-full w-full overflow-hidden ${
+            manifest?.screen?.overscanPercent === 3
+              ? "bg-black p-[3%]"
+              : manifest?.screen?.overscanPercent === 2
+                ? "bg-black p-[2%]"
+                : ""
+          }`}
+        >
+          {mainStageContent}
+        </div>
       )}
 
       {/* Remote Identify Overlay */}

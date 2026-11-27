@@ -6,7 +6,11 @@
  * targets crisp 1080p/720p signage MP4s (< 45 MB) at $0 server cost.
  */
 
-export type VideoCompressionPreset = "auto_fit" | "high_1080p" | "balanced_720p";
+export type VideoCompressionPreset =
+  | "auto_fit"
+  | "high_1080p"
+  | "balanced_720p"
+  | "passthrough";
 
 export interface VideoCompressionPlan {
   shouldCompress: boolean;
@@ -41,7 +45,7 @@ const DEFAULT_MAX_UPLOAD_BYTES = 46 * 1024 * 1024; // 46 MB ceiling (keeps TV lo
 const AUTO_FIT_TARGET_BYTES = 24 * 1024 * 1024; // 24 MB signage budget (2x more videos fit in TV cache)
 const HIGH_1080P_TARGET_BYTES = 38 * 1024 * 1024; // 38 MB high-bitrate hero promos
 const BALANCED_720P_TARGET_BYTES = 14 * 1024 * 1024; // 14 MB ultra-compact TV clips
-const COMPACT_PASSTHROUGH_BYTES = 10 * 1024 * 1024; // Only truly compact <=10 MB MP4s skip compression
+const COMPACT_PASSTHROUGH_BYTES = 8 * 1024 * 1024; // Only truly tiny <=8 MB MP4s skip broadcast normalization
 
 let aacEncoderRegistered = false;
 
@@ -89,6 +93,23 @@ export function computeVideoCompressionPlan(params: {
   const isMp4 =
     params.mimeType === "video/mp4" ||
     params.fileName.toLowerCase().endsWith(".mp4");
+
+  if (
+    preset === "passthrough" &&
+    isMp4 &&
+    params.fileSizeBytes <= maxUploadBytes
+  ) {
+    return {
+      shouldCompress: false,
+      targetMaxBytes: maxUploadBytes,
+      targetWidth: toEvenDimension(srcW),
+      targetHeight: toEvenDimension(srcH),
+      videoBitrate: 0,
+      audioBitrate: 0,
+      estimatedOutputMb: Number((params.fileSizeBytes / (1024 * 1024)).toFixed(1)),
+      reason: "Original MP4 passthrough selected",
+    };
+  }
 
   if (
     preset === "auto_fit" &&
@@ -226,12 +247,13 @@ async function runSinglePass(args: {
       fit: "contain",
       frameRate: 30,
       bitrate: args.videoBitrate,
-      keyFrameInterval: 3,
+      keyFrameInterval: 2,
       forceTranscode: true,
     },
     audio: {
       codec: "aac",
       bitrate: args.audioBitrate,
+      sampleRate: 48_000,
       numberOfChannels: 2,
       forceTranscode: true,
     },

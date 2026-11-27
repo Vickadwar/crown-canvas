@@ -7,12 +7,14 @@ import {
   getEmployeeInitials,
 } from "../avatar-generator";
 import {
+  assembleAtomicPlaybackQueue,
   buildDailyBroadcastTimeline,
   chunkRecognitionsIntoWallPages,
   getStableSlideContentKey,
   interleavePlaybackItems,
   matchesPromotionForScreen,
   matchesScreenTarget,
+  pairNewsletterPagesIntoSpreads,
   resolveActiveRotationStep,
   resolveEffectivePromoCadence,
   resolvePreservedSlideIndex,
@@ -327,4 +329,85 @@ test("resolveEffectivePromoCadence auto-interleaves every 3 slides by default (0
   assert.equal(resolveEffectivePromoCadence(5, true), 5);
   assert.equal(resolveEffectivePromoCadence(-1, true), 0);
   assert.equal(resolveEffectivePromoCadence(0, false), 0);
+});
+
+test("assembleAtomicPlaybackQueue keeps 3-page newsletters and multi-page recognition walls strictly contiguous", () => {
+  const queue = assembleAtomicPlaybackQueue({
+    baseItems: ["B1", "B2", "B3", "B4", "B5", "B6"],
+    promotions: ["PROMO-1", "PROMO-2"],
+    promoEveryN: 3,
+    newsletterBlocks: [
+      { items: ["NL-P1", "NL-P2", "NL-P3"], everyN: 4 },
+    ],
+    recognitionBlocks: [
+      { items: ["REC-W1", "REC-W2"], everyN: 6 },
+    ],
+  });
+
+  // Verify the 3-page newsletter stays strictly contiguous (never split by REC-W1 or PROMO-2!)
+  const p1Idx = queue.indexOf("NL-P1");
+  assert.ok(p1Idx >= 0);
+  assert.equal(queue[p1Idx + 1], "NL-P2");
+  assert.equal(queue[p1Idx + 2], "NL-P3");
+
+  // Verify Recognition Wall pages stay strictly contiguous
+  const r1Idx = queue.indexOf("REC-W1");
+  assert.ok(r1Idx >= 0);
+  assert.equal(queue[r1Idx + 1], "REC-W2");
+
+  // Even when newsletter and recognition land on the same base-slide boundary (short playlist),
+  // neither block ever splits the other!
+  const shortQueue = assembleAtomicPlaybackQueue({
+    baseItems: ["B1", "B2", "B3"],
+    promotions: ["PROMO-1"],
+    promoEveryN: 3,
+    newsletterBlocks: [
+      { items: ["NL-A1", "NL-A2", "NL-A3"], everyN: 4 },
+      { items: ["NL-B1", "NL-B2"], everyN: 4 },
+    ],
+    recognitionBlocks: [{ items: ["REC-1", "REC-2"], everyN: 4 }],
+  });
+
+  assert.deepEqual(shortQueue, [
+    "B1",
+    "B2",
+    "B3",
+    "PROMO-1",
+    "NL-A1",
+    "NL-A2",
+    "NL-A3",
+    "NL-B1",
+    "NL-B2",
+    "REC-1",
+    "REC-2",
+  ]);
+});
+
+test("pairNewsletterPagesIntoSpreads pairs consecutive portrait pages into wide 2-page magazine spreads", () => {
+  const threePages = [
+    { pageNumber: 3, publicUrl: "https://cdn/p3.webp", durationSeconds: 15 },
+    { pageNumber: 1, publicUrl: "https://cdn/p1.webp", durationSeconds: 15 },
+    { pageNumber: 2, publicUrl: "https://cdn/p2.webp", durationSeconds: 15 },
+  ];
+
+  const spreads3 = pairNewsletterPagesIntoSpreads(threePages);
+  assert.equal(spreads3.length, 2);
+  assert.deepEqual(spreads3[0].pageNumbers, [1, 2]);
+  assert.equal(spreads3[0].left.pageNumber, 1);
+  assert.equal(spreads3[0].right?.pageNumber, 2);
+  assert.equal(spreads3[0].durationSeconds, 20);
+  assert.deepEqual(spreads3[1].pageNumbers, [3]);
+  assert.equal(spreads3[1].left.pageNumber, 3);
+  assert.equal(spreads3[1].right, null);
+  assert.equal(spreads3[1].durationSeconds, 15);
+
+  const fourPages = [
+    ...threePages,
+    { pageNumber: 4, publicUrl: "https://cdn/p4.webp", durationSeconds: 18 },
+  ];
+  const spreads4 = pairNewsletterPagesIntoSpreads(fourPages);
+  assert.equal(spreads4.length, 2);
+  assert.deepEqual(spreads4[0].pageNumbers, [1, 2]);
+  assert.deepEqual(spreads4[1].pageNumbers, [3, 4]);
+  assert.equal(spreads4[1].durationSeconds, 23);
 });

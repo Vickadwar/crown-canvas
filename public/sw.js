@@ -5,7 +5,7 @@
 //    Supabase Storage CDN so sidebar product photos, Studio backgrounds, and brochures
 //    never re-download on repeat slide rotations (zero range-video interference).
 
-const SHELL_CACHE = "crown-canvas-shell-v5";
+const SHELL_CACHE = "crown-canvas-shell-v6";
 const CDN_ASSETS_CACHE = "crown-canvas-cdn-assets-v1";
 
 self.addEventListener("install", (event) => {

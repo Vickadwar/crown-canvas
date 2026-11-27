@@ -242,10 +242,13 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
         file.type.startsWith("video/") ||
         /\.(mp4|mov|webm|mkv|m4v)$/i.test(file.name)
       ) {
+        const isMp4 =
+          file.type === "video/mp4" || file.name.toLowerCase().endsWith(".mp4");
         const needsCompression =
-          file.size > 32 * 1024 * 1024 ||
-          compressionPreset !== "auto_fit" ||
-          !(file.type === "video/mp4" || file.name.toLowerCase().endsWith(".mp4"));
+          compressionPreset !== "passthrough" &&
+          (file.size > 8 * 1024 * 1024 ||
+            compressionPreset !== "auto_fit" ||
+            !isMp4);
 
         if (needsCompression) {
           if (!isWebCodecsSupported()) {
@@ -706,15 +709,19 @@ export function MediaTab({ data, onRefresh }: MediaTabProps) {
                               options={[
                                 {
                                   value: "auto_fit",
-                                  label: "Auto Fit < 45 MB (Recommended)",
+                                  label: "TV Broadcast Safe (30fps CFR • Recommended)",
                                 },
                                 {
                                   value: "high_1080p",
-                                  label: "High Quality 1080p H.264",
+                                  label: "High Quality 1080p H.264 (30fps CFR)",
                                 },
                                 {
                                   value: "balanced_720p",
                                   label: "Compact 720p (Longer Videos)",
+                                },
+                                {
+                                  value: "passthrough",
+                                  label: "Original MP4 Passthrough (Skip Re-encode)",
                                 },
                               ]}
                             />

@@ -261,6 +261,139 @@ export function interleavePlaybackItems<T>(params: {
   return out;
 }
 
+export interface AtomicBlockSchedule<T> {
+  items: T[];
+  everyN: number;
+}
+
+/**
+ * Assembles the final playback queue while guaranteeing that multi-page Newsletters
+ * and multi-page Employee Recognition Walls are NEVER split by promotions or by each
+ * other. Every atomic block is inserted strictly at a base-slide boundary so Page 1 ->
+ * Page 2 -> ... -> Page N always renders continuously without interruption.
+ */
+export function assembleAtomicPlaybackQueue<T>(params: {
+  baseItems: T[];
+  promotions?: T[];
+  promoEveryN?: number;
+  newsletterBlocks?: AtomicBlockSchedule<T>[];
+  recognitionBlocks?: AtomicBlockSchedule<T>[];
+}): T[] {
+  const base = params.baseItems;
+  const promos = params.promotions ?? [];
+  const promoN = Math.max(0, Math.floor(params.promoEveryN ?? 0));
+  const nlBlocks = (params.newsletterBlocks ?? []).filter(
+    (b) => b.items.length > 0
+  );
+  const recBlocks = (params.recognitionBlocks ?? []).filter(
+    (b) => b.items.length > 0
+  );
+
+  if (base.length === 0) {
+    return [
+      ...promos,
+      ...nlBlocks.flatMap((b) => b.items),
+      ...recBlocks.flatMap((b) => b.items),
+    ];
+  }
+
+  // Assign each atomic newsletter and recognition block to a deterministic base-slide boundary
+  const nlAtSlide = new Map<number, T[][]>();
+  nlBlocks.forEach((block, idx) => {
+    const cadence = Math.max(1, Math.floor(block.everyN || 4));
+    const slot = Math.min(base.length, cadence * (idx + 1));
+    const existing = nlAtSlide.get(slot) ?? [];
+    existing.push(block.items);
+    nlAtSlide.set(slot, existing);
+  });
+
+  const recAtSlide = new Map<number, T[][]>();
+  recBlocks.forEach((block, idx) => {
+    const cadence = Math.max(1, Math.floor(block.everyN || 6));
+    const slot = Math.min(base.length, cadence * (idx + 1));
+    const existing = recAtSlide.get(slot) ?? [];
+    existing.push(block.items);
+    recAtSlide.set(slot, existing);
+  });
+
+  const out: T[] = [];
+  let promoCursor = 0;
+
+  for (let i = 0; i < base.length; i++) {
+    out.push(base[i]);
+    const slideNumber = i + 1;
+
+    if (promoN > 0 && promos.length > 0 && slideNumber % promoN === 0) {
+      out.push(promos[promoCursor % promos.length]);
+      promoCursor += 1;
+    }
+
+    const nlHere = nlAtSlide.get(slideNumber);
+    if (nlHere) {
+      for (const blockItems of nlHere) {
+        out.push(...blockItems);
+      }
+    }
+
+    const recHere = recAtSlide.get(slideNumber);
+    if (recHere) {
+      for (const blockItems of recHere) {
+        out.push(...blockItems);
+      }
+    }
+  }
+
+  // Ensure at least one promotion airs per loop if the base playlist is shorter than promoEveryN
+  if (promoN > 0 && promos.length > 0 && promoCursor === 0) {
+    out.push(promos[0]);
+  }
+
+  return out;
+}
+
+export interface NewsletterSpreadSlide<P> {
+  left: P;
+  right: P | null;
+  pageNumbers: number[];
+  durationSeconds: number;
+}
+
+/**
+ * Pairs sequential A4 portrait newsletter pages into wide 2-page magazine spreads
+ * ([P1, P2], [P3, P4], ...). Two side-by-side A4 pages create a 1.414:1 editorial
+ * aspect ratio that fills ~95% of a 16:9 TV stage naturally with zero cropping.
+ */
+export function pairNewsletterPagesIntoSpreads<
+  P extends { pageNumber: number; durationSeconds?: number | null }
+>(pages: P[]): NewsletterSpreadSlide<P>[] {
+  const sorted = [...pages].sort((a, b) => a.pageNumber - b.pageNumber);
+  const spreads: NewsletterSpreadSlide<P>[] = [];
+
+  for (let i = 0; i < sorted.length; i += 2) {
+    const left = sorted[i];
+    const right = sorted[i + 1] ?? null;
+    const leftDur = Math.max(5, Number(left.durationSeconds) || 15);
+    if (right) {
+      const rightDur = Math.max(5, Number(right.durationSeconds) || 15);
+      spreads.push({
+        left,
+        right,
+        pageNumbers: [left.pageNumber, right.pageNumber],
+        durationSeconds: Math.min(45, Math.max(leftDur, rightDur) + 5),
+      });
+    } else {
+      spreads.push({
+        left,
+        right: null,
+        pageNumbers: [left.pageNumber],
+        durationSeconds: leftDur,
+      });
+    }
+  }
+
+  return spreads;
+}
+
 export interface TimelineSlot {
   hour: number;
   label: string;

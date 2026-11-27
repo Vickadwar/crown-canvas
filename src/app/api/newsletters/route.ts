@@ -31,8 +31,15 @@ const createNewsletterSchema = z.object({
   departmentName: z.string().trim().max(120).default("Corporate Comms"),
   pages: z.array(pageSlideSchema).min(1).max(40),
   displayFitMode: z
-    .enum(["auto", "ambient_blur", "edge_cover", "showroom_light"])
-    .default("auto"),
+    .enum([
+      "magazine_spread",
+      "widescreen_pan",
+      "auto",
+      "ambient_blur",
+      "edge_cover",
+      "showroom_light",
+    ])
+    .default("magazine_spread"),
   injectEveryNSlides: z.number().int().min(1).max(50).default(4),
   audioTrackId: z.string().uuid().nullable().optional(),
   targetType: z

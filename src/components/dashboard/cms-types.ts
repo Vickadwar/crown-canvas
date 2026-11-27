@@ -242,7 +242,14 @@ export interface PromotionItem {
   mimeType: string;
   fileSizeBytes: number;
   durationSeconds: number;
-  displayFitMode?: "auto" | "ambient_blur" | "edge_cover" | "showroom_light" | string;
+  displayFitMode?:
+    | "magazine_spread"
+    | "widescreen_pan"
+    | "auto"
+    | "ambient_blur"
+    | "edge_cover"
+    | "showroom_light"
+    | string;
   audioTrackId: string | null;
   targetType:
     | "screen"
@@ -278,7 +285,14 @@ export interface NewsletterItem {
   issueLabel: string;
   departmentName: string;
   pages: NewsletterPageItem[];
-  displayFitMode?: "auto" | "ambient_blur" | "edge_cover" | "showroom_light" | string;
+  displayFitMode?:
+    | "magazine_spread"
+    | "widescreen_pan"
+    | "auto"
+    | "ambient_blur"
+    | "edge_cover"
+    | "showroom_light"
+    | string;
   injectEveryNSlides: number;
   audioTrackId: string | null;
   targetType:

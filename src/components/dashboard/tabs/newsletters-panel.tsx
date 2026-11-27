@@ -131,8 +131,13 @@ export function NewslettersPanel({
   const [defaultPageSec, setDefaultPageSec] = useState(15);
   const [injectEveryNSlides, setInjectEveryNSlides] = useState(4);
   const [displayFitMode, setDisplayFitMode] = useState<
-    "auto" | "ambient_blur" | "edge_cover" | "showroom_light"
-  >("auto");
+    | "magazine_spread"
+    | "widescreen_pan"
+    | "auto"
+    | "ambient_blur"
+    | "edge_cover"
+    | "showroom_light"
+  >("magazine_spread");
   const [audioTrackId, setAudioTrackId] = useState("");
   const [targetMode, setTargetMode] = useState<
     "global" | "branch" | "country" | "screen_group" | "screens"
@@ -164,7 +169,7 @@ export function NewslettersPanel({
     setDepartmentName("Corporate Comms");
     setDefaultPageSec(15);
     setInjectEveryNSlides(4);
-    setDisplayFitMode("auto");
+    setDisplayFitMode("magazine_spread");
     setAudioTrackId("");
     setTargetMode("global");
     setTargetId("");
@@ -186,10 +191,12 @@ export function NewslettersPanel({
     setInjectEveryNSlides(nl.injectEveryNSlides || 4);
     setDisplayFitMode(
       (nl.displayFitMode as
+        | "magazine_spread"
+        | "widescreen_pan"
         | "auto"
         | "ambient_blur"
         | "edge_cover"
-        | "showroom_light") || "auto"
+        | "showroom_light") || "magazine_spread"
     );
     setAudioTrackId(nl.audioTrackId ?? "");
 
@@ -585,11 +592,10 @@ export function NewslettersPanel({
                     {pageDrafts.map((pg, idx) => (
                       <div
                         key={pg.key}
-                        className={`flex flex-col overflow-hidden rounded-lg border bg-white transition ${
-                          pg.included
+                        className={`flex flex-col overflow-hidden rounded-lg border bg-white transition ${pg.included
                             ? "border-emerald-300 shadow-2xs"
                             : "border-zinc-200 opacity-50"
-                        }`}
+                          }`}
                       >
                         <div className="relative flex aspect-[3/4] items-center justify-center overflow-hidden bg-zinc-100">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -609,11 +615,10 @@ export function NewslettersPanel({
                                 )
                               )
                             }
-                            className={`absolute right-2 top-2 flex size-5 items-center justify-center rounded border shadow-xs transition ${
-                              pg.included
+                            className={`absolute right-2 top-2 flex size-5 items-center justify-center rounded border shadow-xs transition ${pg.included
                                 ? "border-emerald-600 bg-emerald-600 text-white"
                                 : "border-zinc-300 bg-white text-transparent"
-                            }`}
+                              }`}
                             title={
                               pg.included
                                 ? "Exclude this page"
@@ -643,12 +648,12 @@ export function NewslettersPanel({
                                   prev.map((item, i) =>
                                     i === idx
                                       ? {
-                                          ...item,
-                                          durationSeconds: Math.max(
-                                            5,
-                                            Number(e.target.value) || 15
-                                          ),
-                                        }
+                                        ...item,
+                                        durationSeconds: Math.max(
+                                          5,
+                                          Number(e.target.value) || 15
+                                        ),
+                                      }
                                       : item
                                   )
                                 )
@@ -726,7 +731,7 @@ export function NewslettersPanel({
                 />
               </div>
               <div className="space-y-1 md:col-span-3">
-                <Label className="text-xs">A4 Backdrop / Fit Mode</Label>
+                <Label className="text-xs">TV Display Layout Mode</Label>
                 <ModernSelect
                   size="sm"
                   value={displayFitMode}
@@ -734,10 +739,18 @@ export function NewslettersPanel({
                     setDisplayFitMode(v as typeof displayFitMode)
                   }
                   options={[
-                    { value: "auto", label: "Auto (A4 Color-Bleed Blur)" },
-                    { value: "ambient_blur", label: "Vibrant Ambient Blur" },
-                    { value: "showroom_light", label: "Showroom Light Gallery" },
-                    { value: "edge_cover", label: "Edge-to-Edge Fill" },
+                    {
+                      value: "magazine_spread",
+                      label: "2-Page Magazine Spread (Wide • Recommended)",
+                    },
+                    {
+                      value: "widescreen_pan",
+                      label: "Widescreen Auto-Scroll (2× Larger Text)",
+                    },
+                    { value: "auto", label: "Single Page (A4 Color-Bleed Blur)" },
+                    { value: "showroom_light", label: "Single Page (White Gallery)" },
+                    { value: "ambient_blur", label: "Single Page (Vibrant Blur)" },
+                    { value: "edge_cover", label: "Full-Bleed Edge Cover" },
                   ]}
                 />
               </div>
@@ -872,11 +885,10 @@ export function NewslettersPanel({
                                 : [...prev, scr.id]
                             )
                           }
-                          className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-xs transition ${
-                            checked
+                          className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-xs transition ${checked
                               ? "border-zinc-950 bg-white font-semibold"
                               : "border-zinc-200 bg-white/70 text-zinc-600"
-                          }`}
+                            }`}
                         >
                           <span className="truncate">{scr.name}</span>
                           {checked && (
@@ -931,11 +943,10 @@ export function NewslettersPanel({
                                 : [...prev, pl.id]
                             )
                           }
-                          className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-xs transition ${
-                            checked
+                          className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-xs transition ${checked
                               ? "border-zinc-950 bg-white font-semibold text-zinc-950"
                               : "border-zinc-200 bg-white/70 text-zinc-600 hover:border-zinc-300"
-                          }`}
+                            }`}
                         >
                           <span className="truncate">{pl.name}</span>
                           {checked && (
@@ -1062,8 +1073,12 @@ export function NewslettersPanel({
                       variant="outline"
                       className="border-white/20 bg-black/65 text-[10px] text-white"
                     >
-                      {pages.length} Slide{pages.length === 1 ? "" : "s"} •{" "}
-                      {totalDuration}s
+                      {pages.length} Page{pages.length === 1 ? "" : "s"} •{" "}
+                      {nl.displayFitMode === "magazine_spread"
+                        ? "2-Page Spread"
+                        : nl.displayFitMode === "widescreen_pan"
+                          ? "Wide Scroll"
+                          : `${totalDuration}s`}
                     </Badge>
                   </div>
                 </div>
@@ -1087,11 +1102,11 @@ export function NewslettersPanel({
                       <span className="truncate">
                         {nl.targetPlaylistIds && nl.targetPlaylistIds.length > 0
                           ? (() => {
-                              const names = nl.targetPlaylistIds
-                                .map((id) => playlistById.get(id)?.name)
-                                .filter(Boolean);
-                              return `Playlists: ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}`;
-                            })()
+                            const names = nl.targetPlaylistIds
+                              .map((id) => playlistById.get(id)?.name)
+                              .filter(Boolean);
+                            return `Playlists: ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}`;
+                          })()
                           : `Every ${nl.injectEveryNSlides} slides on target TVs`}
                       </span>
                     </p>
